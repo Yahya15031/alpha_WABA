@@ -16,9 +16,10 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
-
+from dotenv import load_dotenv, find_dotenv
 from app.models import Base
-
+load_dotenv(find_dotenv())
+    
 config = context.config
 
 if config.config_file_name is not None:
@@ -60,10 +61,16 @@ async def run_async_migrations() -> None:
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        connect_args={
+            "server_settings": {
+                "search_path": "public"
+            }
+        }
     )
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)
     await connectable.dispose()
+
 
 
 def run_migrations_online() -> None:

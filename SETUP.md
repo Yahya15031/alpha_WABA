@@ -66,7 +66,7 @@ Then build the app_role connection string by taking your Supabase DB URI and
 replacing the user + password:
 
 ```
-postgresql+asyncpg://app_role:CHOOSE_A_STRONG_PASSWORD@db.<project-ref>.supabase.co:5432/postgres
+postgresql+asyncpg://app_role:nskjsFsWe23dfe9s@db.sleeldbtpkqysqyzjkza.supabase.co:5432/postgres?options=-c%20search_path=public
 ```
 
 That's the `DATABASE_URL` env var below.
@@ -77,15 +77,15 @@ Create a `.env` at the repo root:
 
 ```
 # Postgres — the app_role connection (RLS applies)
-DATABASE_URL=postgresql+asyncpg://app_role:PASSWORD@db.PROJECT.supabase.co:5432/postgres
+DATABASE_URL=postgresql+asyncpg://app_role:nskjsFsWe23dfe9s@db.sleeldbtpkqysqyzjkza.supabase.co:5432/postgres
 
 # Postgres — the postgres role connection, used by Alembic only (RLS bypassed for migrations)
 MIGRATION_DATABASE_URL=postgresql+asyncpg://postgres:DB_PASSWORD@db.PROJECT.supabase.co:5432/postgres
 
 # Supabase auth
-SUPABASE_JWT_SECRET=paste_from_settings_api
-SUPABASE_URL=https://PROJECT.supabase.co
-SUPABASE_ANON_KEY=paste_from_settings_api
+SUPABASE_JWT_SECRET=KOzlj8j2S8H8mhtrq94Zh3QbuN4mg2ta/uQuFRLXyRUw7quQWQ8OmWTfh1Jb2DvFITAwMHmI/CxuPMSJPai/gA==
+SUPABASE_URL=hhttps://sleeldbtpkqysqyzjkza.supabase.co
+SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNsZWVsZGJ0cGtxeXNxeXpqa3phIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQyNzMyMDMsImV4cCI6MjA5OTg0OTIwM30.sCSp26FZ41uSnPpUCNQ_yCQWaJRFF4rnn_TDfAVBmFI
 
 # Environment
 APP_ENV=development

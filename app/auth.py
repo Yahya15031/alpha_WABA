@@ -224,8 +224,10 @@ async def get_current_user(
         async with session.begin():
             # Use the login-lookup RLS policy: set the supabase_user_id session
             # variable so the users table lets us SELECT this one row.
+            # NOTE: set_config() instead of SET LOCAL — Postgres's SET LOCAL
+            # doesn't accept bound parameters ($1), but the function form does.
             await session.execute(
-                text("SET LOCAL app.authenticating_supabase_user_id = :sid"),
+                text("SELECT set_config('app.authenticating_supabase_user_id', :sid, true)"),
                 {"sid": str(identity.external_id)},
             )
 
@@ -242,7 +244,9 @@ async def get_current_user(
                 #
                 # Fix: elevate briefly for the INSERT. This is safe because the
                 # user's identity is already verified by the JWT signature.
-                await session.execute(text("SET LOCAL app.is_platform_admin = 'true'"))
+                await session.execute(
+                    text("SELECT set_config('app.is_platform_admin', 'true', true)")
+                )
                 user = User(
                     supabase_user_id=identity.external_id,
                     email=identity.email,
@@ -253,7 +257,9 @@ async def get_current_user(
                 await session.flush()  # populate user.id
                 # Reset the bypass so the returned object doesn't accidentally
                 # carry admin permissions elsewhere.
-                await session.execute(text("SET LOCAL app.is_platform_admin = 'false'"))
+                await session.execute(
+                    text("SELECT set_config('app.is_platform_admin', 'false', true)")
+                )
 
     return CurrentUser(
         id=user.id,
@@ -308,14 +314,16 @@ async def get_active_tenant_context(
             # so we set it to the candidate tenant_id — if the row exists, the
             # user has membership.
             if current_user.is_platform_admin:
-                await session.execute(text("SET LOCAL app.is_platform_admin = 'true'"))
+                await session.execute(
+                    text("SELECT set_config('app.is_platform_admin', 'true', true)")
+                )
             else:
                 await session.execute(
-                    text("SET LOCAL app.current_user_id = :uid"),
+                    text("SELECT set_config('app.current_user_id', :uid, true)"),
                     {"uid": str(current_user.id)},
                 )
                 await session.execute(
-                    text("SET LOCAL app.current_tenant_id = :tid"),
+                    text("SELECT set_config('app.current_tenant_id', :tid, true)"),
                     {"tid": str(tenant_id)},
                 )
 

@@ -76,26 +76,28 @@ async def apply_tenant_context(
 ) -> None:
     """Set Postgres session variables that RLS policies key off.
 
-    Uses SET LOCAL — settings are scoped to the current transaction only.
-    Caller must have an active transaction (typical pattern:
-    `async with session.begin(): await apply_tenant_context(...)`).
+    Uses `set_config(name, value, is_local=true)` — the SQL function form of
+    SET LOCAL. Postgres's `SET LOCAL` statement does NOT accept bound
+    parameters ($1); it only takes literals. `set_config()` is the function
+    variant and accepts parameters cleanly, which is what SQLAlchemy needs
+    when we pass values via `text(...)` with `:name` binds.
 
-    Parameters
-    ----------
-    tenant_id : the active tenant. None only for platform admin / system sessions.
-    user_id : the authenticated user id (our internal id, not supabase_user_id).
-    is_platform_admin : true to grant admin bypass on all RLS policies.
+    Settings are transaction-scoped (is_local=true) — cleared when the
+    transaction commits or rolls back. Caller must have an active
+    transaction (typical pattern: `async with session.begin(): ...`).
     """
     if is_platform_admin:
-        await session.execute(text("SET LOCAL app.is_platform_admin = 'true'"))
+        await session.execute(
+            text("SELECT set_config('app.is_platform_admin', 'true', true)")
+        )
     if tenant_id is not None:
         await session.execute(
-            text("SET LOCAL app.current_tenant_id = :tid"),
+            text("SELECT set_config('app.current_tenant_id', :tid, true)"),
             {"tid": str(tenant_id)},
         )
     if user_id is not None:
         await session.execute(
-            text("SET LOCAL app.current_user_id = :uid"),
+            text("SELECT set_config('app.current_user_id', :uid, true)"),
             {"uid": str(user_id)},
         )
 

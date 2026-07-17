@@ -30,6 +30,9 @@ dependencies = [
 
     # CSV ingestion (used in later turns)
     "python-multipart>=0.0.19",
+
+    # Load .env in dev / on Windows where the shell doesn't auto-load it
+    "python-dotenv>=1.0.1",
 ]
 
 [project.optional-dependencies]

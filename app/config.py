@@ -58,12 +58,33 @@ class Settings(BaseSettings):
     supabase_jwt_audience: str = "authenticated"
     supabase_anon_key: SecretStr | None = None
 
-    # ---- Redis (for arq queues, wired in next turn) ----
+    # ---- Redis (Upstash for arq queues) ----
     redis_url: str | None = None
 
-    # ---- Meta Cloud API (wired in next turn) ----
+    # ---- Meta Cloud API ----
     meta_graph_api_version: str = "v25.0"
     meta_graph_api_base_url: str = "https://graph.facebook.com"
+
+    # Access token used by the backend to call Meta's Graph API. Dev: 24hr
+    # token from the dashboard; prod: permanent System User token.
+    meta_access_token: SecretStr | None = None
+
+    # App Secret from Meta App Dashboard → Settings → Basic → App Secret.
+    # Used to verify HMAC-SHA256 signatures on incoming webhooks.
+    meta_app_secret: SecretStr | None = None
+
+    # Verify token — a random string you choose. Same value goes into Meta's
+    # webhook config and this env var. Used only during the initial GET
+    # handshake when the webhook URL is saved.
+    meta_webhook_verify_token: SecretStr | None = None
+
+    # ---- CORS ----
+    # Comma-separated list of frontend origins allowed to call the API.
+    allowed_cors_origins: str = "http://localhost:3000,http://localhost:5173"
+
+    @property
+    def allowed_cors_origins_list(self) -> list[str]:
+        return [o.strip() for o in self.allowed_cors_origins.split(",") if o.strip()]
 
     @property
     def is_production(self) -> bool:

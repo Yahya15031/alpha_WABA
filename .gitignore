@@ -2,6 +2,6 @@ SETUP.md/
 __pycache__/
 *.py[cod]
 *$py.class
-.venv/
+frontend/.venv/
 venv/
 .pytest_cache/

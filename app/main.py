@@ -29,13 +29,17 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-    """Startup: ping DB. Shutdown: dispose the engine cleanly."""
+    """Startup: ping DB. Shutdown: dispose the engine + close arq pool."""
     if not await ping():
         logger.error("Database unreachable at startup")
         raise RuntimeError("Database unreachable at startup")
     logger.info("Startup complete (env=%s)", settings.app_env)
     yield
     await dispose_engine()
+    # Close arq Redis pool if it was ever opened (lazy singleton)
+    from app.workers.router import close_arq_pool
+
+    await close_arq_pool()
     logger.info("Shutdown complete")
 
 

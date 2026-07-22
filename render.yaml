@@ -1,47 +1,79 @@
-services:
-  - type: web
-    name: alpha-waba-api
-    runtime: python
-    plan: free
-    region: singapore  # same region as your Supabase + Upstash — keeps latency down
-    branch: main
-    buildCommand: pip install -e .
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
-    healthCheckPath: /healthz
-
+# Env vars are defined once in a shared group and referenced by every service.
+# Set each key manually in Render Dashboard → Environment Groups → alpha-waba-shared.
+envVarGroups:
+  - name: alpha-waba-shared
     envVars:
-      # Postgres — set in Render dashboard (secrets)
       - key: DATABASE_URL
         sync: false
       - key: MIGRATION_DATABASE_URL
         sync: false
-
-      # Supabase auth
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_JWT_SECRET
         sync: false
-
-      # Upstash Redis
       - key: REDIS_URL
         sync: false
-
-      # Meta Cloud API
       - key: META_ACCESS_TOKEN
         sync: false
       - key: META_APP_SECRET
         sync: false
       - key: META_WEBHOOK_VERIFY_TOKEN
         sync: false
-
-      # CORS — comma-separated origins (frontend URL, Figma preview, localhost)
       - key: ALLOWED_CORS_ORIGINS
         sync: false
-
-      # Fixed config
       - key: APP_ENV
         value: production
       - key: LOG_LEVEL
         value: INFO
       - key: PYTHONUNBUFFERED
         value: "1"
+
+services:
+  # ------------------------------------------------------------------
+  # Web service — FastAPI app (public URL)
+  # ------------------------------------------------------------------
+  - type: web
+    name: alpha-waba-api
+    runtime: python
+    plan: free
+    region: singapore
+    branch: main
+    buildCommand: pip install -e .
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /healthz
+    envVars:
+      - fromGroup: alpha-waba-shared
+
+  # ------------------------------------------------------------------
+  # Worker — transactional lane (webhook processing, OTP-style sends)
+  # Render background workers require a paid plan ($7/mo).
+  # For dev, comment this out and run locally instead:
+  #   arq app.workers.settings.TransactionalWorkerSettings
+  # ------------------------------------------------------------------
+  - type: worker
+    name: alpha-waba-worker-transactional
+    runtime: python
+    plan: starter  # $7/mo — free tier not available for workers
+    region: singapore
+    branch: main
+    buildCommand: pip install -e .
+    startCommand: arq app.workers.settings.TransactionalWorkerSettings
+    envVars:
+      - fromGroup: alpha-waba-shared
+
+  # ------------------------------------------------------------------
+  # Worker — bulk lane (broadcast campaigns)
+  # Same story: paid tier only. For dev, run locally:
+  #   arq app.workers.settings.BulkWorkerSettings
+  # Enable this once you're actually running broadcasts at scale.
+  # ------------------------------------------------------------------
+  - type: worker
+    name: alpha-waba-worker-bulk
+    runtime: python
+    plan: starter
+    region: singapore
+    branch: main
+    buildCommand: pip install -e .
+    startCommand: arq app.workers.settings.BulkWorkerSettings
+    envVars:
+      - fromGroup: alpha-waba-shared

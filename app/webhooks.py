@@ -130,7 +130,7 @@ async def receive_webhook(
     meta_waba_id, meta_message_id, event_type = _extract_routing_hints(payload)
 
     async with get_system_session() as session:
-        await session.execute(
+        result = await session.execute(
             text(
                 """
                 INSERT INTO webhook_events
@@ -138,6 +138,7 @@ async def receive_webhook(
                      raw_payload, signature_valid)
                 VALUES
                     (:waba_id, :msg_id, :event_type, CAST(:payload AS JSONB), TRUE)
+                RETURNING id
                 """
             ),
             {
@@ -147,13 +148,32 @@ async def receive_webhook(
                 "payload": json.dumps(payload),
             },
         )
+        row = result.first()
+        webhook_event_id = row[0] if row else None
 
     logger.info(
-        "Webhook staged: type=%s waba=%s msg=%s",
+        "Webhook staged: type=%s waba=%s msg=%s event_id=%s",
         event_type,
         meta_waba_id,
         meta_message_id,
+        webhook_event_id,
     )
+
+    # Best-effort: enqueue processing. If Redis is unavailable, we log and
+    # move on — the row is staged and can be picked up by a cron sweep
+    # (once we add one) or a manual reprocess script.
+    if webhook_event_id is not None and settings.redis_url is not None:
+        try:
+            from app.workers.router import enqueue_webhook_process
+
+            await enqueue_webhook_process(webhook_event_id=webhook_event_id)
+        except Exception as exc:
+            logger.warning(
+                "Failed to enqueue webhook processing for event %s: %s",
+                webhook_event_id,
+                exc,
+            )
+
     return {"status": "received"}
 
 

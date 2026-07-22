@@ -72,7 +72,7 @@ Click **Save Changes**. Render will redeploy automatically with the new env.
 ### 1.5 Confirm it's up
 
 Once the deploy shows **Live**, grab the service URL from the top of the
-dashboard (it'll look like `https://alpha-waba-api.onrender.com`).
+dashboard (it'll look like `  `).
 
 Test the health check:
 

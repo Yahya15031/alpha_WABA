@@ -51,10 +51,11 @@ class Settings(BaseSettings):
 
     # ---- Supabase Auth ----
     supabase_url: str = Field(..., description="e.g. https://xxxx.supabase.co")
-    supabase_jwt_secret: SecretStr = Field(
-        ..., description="Symmetric JWT secret from Supabase → Settings → API"
-    )
-    supabase_jwt_algorithm: str = "HS256"
+    # Legacy — only used if you're on an old HS256 Supabase project. New
+    # projects use asymmetric keys (ES256/RS256) and JWKS verification, which
+    # doesn't need this secret. Kept for backward compat / manual override.
+    supabase_jwt_secret: SecretStr | None = None
+    supabase_jwt_algorithm: str = "ES256"  # informational; JWKS handles it
     supabase_jwt_audience: str = "authenticated"
     supabase_anon_key: SecretStr | None = None
 

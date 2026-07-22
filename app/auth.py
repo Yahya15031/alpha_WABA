@@ -33,6 +33,7 @@ tenant context dep, then use `get_platform_admin_session`.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from dataclasses import dataclass
@@ -107,29 +108,47 @@ class AuthProvider(Protocol):
 
 
 class SupabaseAuthProvider:
-    """Verifies Supabase-issued JWTs using the project's symmetric secret.
+    """Verifies Supabase-issued JWTs against Supabase's JWKS endpoint.
 
-    Supabase JWTs are HS256 by default. If your project uses asymmetric keys,
-    subclass this and override `verify_token` to fetch the JWKS.
+    Supabase projects now sign tokens with asymmetric keys (ES256 by default,
+    RS256 if the project uses RSA). Verification requires the public key,
+    which Supabase exposes at:
+
+        https://<project>.supabase.co/auth/v1/.well-known/jwks.json
+
+    PyJWKClient handles fetching + caching + key rotation. First call fetches
+    the JWKS over HTTP; subsequent calls use the cache. We wrap the sync call
+    in `asyncio.to_thread` so it doesn't block the event loop.
+
+    Note: this class supersedes the earlier HS256-based verification. Older
+    Supabase projects that still sign with HS256 need `SUPABASE_JWT_SECRET`
+    and a different provider — not currently implemented since our project
+    has migrated to asymmetric.
     """
 
     def __init__(
         self,
         *,
-        jwt_secret: str,
-        algorithm: str = "HS256",
+        supabase_url: str,
         audience: str = "authenticated",
     ) -> None:
-        self._secret = jwt_secret
-        self._algorithm = algorithm
+        jwks_url = f"{supabase_url.rstrip('/')}/auth/v1/.well-known/jwks.json"
+        # cache_keys=True caches the JWKS in memory. lifespan default is
+        # ~5 min, sufficient — key rotation is rare.
+        self._jwks_client = jwt.PyJWKClient(jwks_url, cache_keys=True)
         self._audience = audience
 
     async def verify_token(self, token: str) -> PlatformIdentity:
         try:
+            # Sync HTTP call on first use, cached after. Threaded so we
+            # don't block the event loop.
+            signing_key = await asyncio.to_thread(
+                self._jwks_client.get_signing_key_from_jwt, token
+            )
             claims = jwt.decode(
                 token,
-                self._secret,
-                algorithms=[self._algorithm],
+                signing_key.key,
+                algorithms=["ES256", "RS256"],
                 audience=self._audience,
             )
         except jwt.ExpiredSignatureError:
@@ -145,8 +164,15 @@ class SupabaseAuthProvider:
                 detail="Invalid token",
                 headers={"WWW-Authenticate": "Bearer"},
             )
+        except Exception as exc:
+            # JWKS fetch failed (network, DNS, malformed response, etc)
+            logger.error("JWKS verification error: %s", exc)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Auth verification failed",
+            )
 
-        # Supabase JWTs put the user id in `sub`.
+        # Supabase puts the user id in `sub`.
         sub = claims.get("sub")
         email = claims.get("email")
         if not sub or not email:
@@ -183,8 +209,7 @@ def get_auth_provider() -> AuthProvider:
     global _auth_provider
     if _auth_provider is None:
         _auth_provider = SupabaseAuthProvider(
-            jwt_secret=settings.supabase_jwt_secret.get_secret_value(),
-            algorithm=settings.supabase_jwt_algorithm,
+            supabase_url=settings.supabase_url,
             audience=settings.supabase_jwt_audience,
         )
     return _auth_provider

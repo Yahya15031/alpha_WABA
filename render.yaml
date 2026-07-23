@@ -50,16 +50,15 @@ services:
   # For dev, comment this out and run locally instead:
   #   arq app.workers.settings.TransactionalWorkerSettings
   # ------------------------------------------------------------------
-  - type: worker
-    name: alpha-waba-worker-transactional
-    runtime: python
-    plan: starter  # $7/mo — free tier not available for workers
-    region: singapore
-    branch: main
-    buildCommand: pip install -e .
-    startCommand: arq app.workers.settings.TransactionalWorkerSettings
-    envVars:
-      - fromGroup: alpha-waba-shared
+  #- type: worker
+   #runtime: python
+   # plan: starter  # $7/mo — free tier not available for workers
+   # region: singapore
+    #branch: main
+    #buildCommand: pip install -e .
+    #startCommand: arq app.workers.settings.TransactionalWorkerSettings
+    #envVars:
+     # - fromGroup: alpha-waba-shared
 
   # ------------------------------------------------------------------
   # Worker — bulk lane (broadcast campaigns)
@@ -67,13 +66,13 @@ services:
   #   arq app.workers.settings.BulkWorkerSettings
   # Enable this once you're actually running broadcasts at scale.
   # ------------------------------------------------------------------
-  - type: worker
-    name: alpha-waba-worker-bulk
-    runtime: python
-    plan: starter
-    region: singapore
-    branch: main
-    buildCommand: pip install -e .
-    startCommand: arq app.workers.settings.BulkWorkerSettings
-    envVars:
-      - fromGroup: alpha-waba-shared
+ # - type: worker
+  #  name: alpha-waba-worker-bulk
+   # runtime: python
+ #   plan: starter
+  #  region: singapore
+   # branch: main
+   # buildCommand: pip install -e .
+   # startCommand: arq app.workers.settings.BulkWorkerSettings
+   # envVars:
+    #  - fromGroup: alpha-waba-shared

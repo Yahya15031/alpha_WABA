@@ -18,6 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api import router as api_router
 from app.config import settings
 from app.db import dispose_engine, ping
+from app.routes import router as routes_router
 from app.webhooks import router as webhooks_router
 
 logging.basicConfig(
@@ -62,6 +63,7 @@ def create_app() -> FastAPI:
 
     app.include_router(webhooks_router)
     app.include_router(api_router)
+    app.include_router(routes_router)
 
     return app
 

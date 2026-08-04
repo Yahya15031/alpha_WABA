@@ -1,0 +1,413 @@
+"""Contacts routes.
+
+  POST /contacts/upload   — CSV upload (multipart). ?commit=false for preview.
+  GET  /contacts          — paginated directory listing with search/filter.
+  GET  /contacts/count    — number of contacts (for "Active Contacts" KPI).
+
+CSV rules (per PM):
+  - Required column: `phone` (case-insensitive; also accepts phone_number,
+    mobile, whatsapp, number).
+  - Optional columns: full_name (or name), segment (or category), branch
+    (matched by branch name; ignored if not found).
+  - Encoding: UTF-8 only. Non-UTF-8 → 400.
+  - Row cap: 10,000.
+  - Phone validation: E.164 (starts with `+`, followed by 1-15 digits).
+    We strip spaces, dashes, and parens before validating.
+  - Duplicates (same phone, within the same upload OR already in DB): first
+    occurrence wins; subsequent flagged as duplicate in the error report but
+    NOT inserted.
+"""
+from __future__ import annotations
+
+import csv
+import io
+import re
+import uuid
+from typing import Any
+
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from pydantic import BaseModel
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.auth import (
+    CurrentUser,
+    TenantContext,
+    get_active_tenant_context,
+    get_current_user,
+    get_tenant_scoped_session,
+)
+from app.models import Branch, Contact, ContactOptInStatus, ContactSource, CsvImport
+
+router = APIRouter(prefix="/contacts", tags=["contacts"])
+
+MAX_ROWS = 10_000
+
+# Column-name aliases (case-insensitive). First match wins.
+_PHONE_ALIASES = {"phone", "phone_number", "phonenumber", "mobile", "whatsapp", "number"}
+_NAME_ALIASES = {"name", "full_name", "fullname", "contact_name"}
+_SEGMENT_ALIASES = {"segment", "category", "group", "tag"}
+_BRANCH_ALIASES = {"branch", "branch_name", "office"}
+
+_E164_RE = re.compile(r"^\+[1-9]\d{1,14}$")
+
+
+# ---------------------------------------------------------------------------
+# Response models
+# ---------------------------------------------------------------------------
+
+
+class UploadPreviewRow(BaseModel):
+    row: int
+    phone_e164: str
+    full_name: str | None = None
+    segment: str | None = None
+    branch: str | None = None
+
+
+class UploadError(BaseModel):
+    row: int
+    phone_raw: str | None = None
+    reason: str
+
+
+class UploadResponse(BaseModel):
+    upload_id: str | None
+    total_rows: int
+    valid: int
+    invalid: int
+    skipped_empty: int
+    preview_rows: list[UploadPreviewRow]
+    errors: list[UploadError]
+    committed: bool
+
+
+class ContactRow(BaseModel):
+    id: str
+    phone_e164: str
+    full_name: str | None
+    branch_id: str | None
+    branch_name: str | None
+    opt_in_status: str
+    source: str
+    created_at: str
+
+
+class ContactsListResponse(BaseModel):
+    data: list[ContactRow]
+    pagination: dict[str, int]
+
+
+class CountResponse(BaseModel):
+    count: int
+
+
+# ---------------------------------------------------------------------------
+# CSV parsing helpers
+# ---------------------------------------------------------------------------
+
+
+def _normalize_phone(raw: str) -> str:
+    """Strip whitespace/dashes/parens. Returns the cleaned string
+    (may or may not be valid E.164 — caller validates)."""
+    return re.sub(r"[\s\-\(\)]", "", raw or "").strip()
+
+
+def _find_column(headers: list[str], aliases: set[str]) -> str | None:
+    """Return the first header whose lowercased/underscored form matches an alias."""
+    for h in headers:
+        key = h.strip().lower().replace(" ", "_")
+        if key in aliases:
+            return h
+    return None
+
+
+async def _parse_csv(
+    file_bytes: bytes,
+) -> tuple[list[dict], list[UploadError], int, dict[str, str | None]]:
+    """Parse CSV bytes into rows + errors + skipped_empty count + column map.
+
+    column_map: {"phone": actual_header, "full_name": actual_header_or_None, ...}
+    Returns raw parsed dicts (not yet DB-inserted).
+    """
+    try:
+        text = file_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        raise HTTPException(
+            status_code=400,
+            detail="File must be UTF-8 encoded. Re-export as UTF-8 CSV.",
+        )
+
+    reader = csv.DictReader(io.StringIO(text))
+    if not reader.fieldnames:
+        raise HTTPException(status_code=400, detail="CSV appears empty or has no header row.")
+
+    headers = list(reader.fieldnames)
+    phone_col = _find_column(headers, _PHONE_ALIASES)
+    if phone_col is None:
+        raise HTTPException(
+            status_code=400,
+            detail="No phone column found. Expected one of: "
+            + ", ".join(sorted(_PHONE_ALIASES)),
+        )
+
+    column_map = {
+        "phone": phone_col,
+        "full_name": _find_column(headers, _NAME_ALIASES),
+        "segment": _find_column(headers, _SEGMENT_ALIASES),
+        "branch": _find_column(headers, _BRANCH_ALIASES),
+    }
+
+    rows: list[dict] = []
+    errors: list[UploadError] = []
+    skipped_empty = 0
+    seen_phones: set[str] = set()
+
+    for i, raw_row in enumerate(reader, start=2):  # start=2 because row 1 is the header
+        if len(rows) + len(errors) + skipped_empty >= MAX_ROWS:
+            errors.append(
+                UploadError(row=i, phone_raw=None, reason="row_limit_exceeded")
+            )
+            break
+
+        # Fully-empty row?
+        if not any((v or "").strip() for v in raw_row.values()):
+            skipped_empty += 1
+            continue
+
+        phone_raw = (raw_row.get(phone_col) or "").strip()
+        phone_clean = _normalize_phone(phone_raw)
+
+        if not phone_clean:
+            errors.append(UploadError(row=i, phone_raw=phone_raw, reason="missing_phone"))
+            continue
+
+        if not _E164_RE.match(phone_clean):
+            errors.append(UploadError(row=i, phone_raw=phone_raw, reason="invalid_e164"))
+            continue
+
+        if phone_clean in seen_phones:
+            errors.append(
+                UploadError(row=i, phone_raw=phone_raw, reason="duplicate_in_upload")
+            )
+            continue
+        seen_phones.add(phone_clean)
+
+        row: dict[str, Any] = {"row": i, "phone_e164": phone_clean}
+        if column_map["full_name"]:
+            v = (raw_row.get(column_map["full_name"]) or "").strip()
+            row["full_name"] = v or None
+        if column_map["segment"]:
+            v = (raw_row.get(column_map["segment"]) or "").strip()
+            row["segment"] = v or None
+        if column_map["branch"]:
+            v = (raw_row.get(column_map["branch"]) or "").strip()
+            row["branch"] = v or None
+        rows.append(row)
+
+    return rows, errors, skipped_empty, column_map
+
+
+# ---------------------------------------------------------------------------
+# POST /contacts/upload
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/upload",
+    response_model=UploadResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def upload_contacts(
+    file: UploadFile = File(..., description="CSV file with a phone column"),
+    commit: bool = Query(False, description="False = preview only. True = write to DB."),
+    ctx: TenantContext = Depends(get_active_tenant_context),
+    current_user: CurrentUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_tenant_scoped_session),
+) -> UploadResponse:
+    """Parse a CSV, validate every row, return a preview or commit to DB."""
+    if not file.filename or not file.filename.lower().endswith((".csv", ".txt")):
+        raise HTTPException(status_code=415, detail="File must be a .csv")
+
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="File is empty")
+
+    rows, errors, skipped_empty, _cols = await _parse_csv(file_bytes)
+
+    preview = [
+        UploadPreviewRow(
+            row=r["row"],
+            phone_e164=r["phone_e164"],
+            full_name=r.get("full_name"),
+            segment=r.get("segment"),
+            branch=r.get("branch"),
+        )
+        for r in rows[:10]
+    ]
+
+    if not commit:
+        return UploadResponse(
+            upload_id=None,
+            total_rows=len(rows) + len(errors) + skipped_empty,
+            valid=len(rows),
+            invalid=len(errors),
+            skipped_empty=skipped_empty,
+            preview_rows=preview,
+            errors=errors,
+            committed=False,
+        )
+
+    # ---- Commit path ----
+
+    # Build a name → id lookup for branches so we can attach contacts.
+    branch_lookup: dict[str, uuid.UUID] = {}
+    branch_result = await session.execute(select(Branch.id, Branch.name))
+    for bid, bname in branch_result.all():
+        branch_lookup[bname.lower()] = bid
+
+    # Record the import job first.
+    csv_import = CsvImport(
+        tenant_id=ctx.tenant_id,
+        filename=file.filename,
+        uploaded_by=current_user.id,
+        total_rows=len(rows) + len(errors) + skipped_empty,
+        valid_rows=len(rows),
+        invalid_rows=len(errors),
+        error_report=[e.model_dump() for e in errors] if errors else [],
+        status="completed",  # type: ignore[arg-type]
+    )
+    session.add(csv_import)
+    await session.flush()
+
+    # Load existing phone set for this tenant so we don't insert dupes.
+    existing_result = await session.execute(select(Contact.phone_e164))
+    existing_phones = {p for (p,) in existing_result.all()}
+
+    inserted = 0
+    duplicate_in_db = 0
+    for r in rows:
+        if r["phone_e164"] in existing_phones:
+            duplicate_in_db += 1
+            errors.append(
+                UploadError(
+                    row=r["row"],
+                    phone_raw=r["phone_e164"],
+                    reason="duplicate_in_db",
+                )
+            )
+            continue
+
+        branch_id = None
+        if r.get("branch"):
+            branch_id = branch_lookup.get(r["branch"].lower())
+
+        custom_fields = {}
+        if r.get("segment"):
+            custom_fields["segment"] = r["segment"]
+
+        session.add(
+            Contact(
+                tenant_id=ctx.tenant_id,
+                branch_id=branch_id,
+                phone_e164=r["phone_e164"],
+                full_name=r.get("full_name"),
+                opt_in_status=ContactOptInStatus.opted_in,
+                source=ContactSource.csv_upload,
+                custom_fields=custom_fields,
+                csv_import_id=csv_import.id,
+            )
+        )
+        existing_phones.add(r["phone_e164"])
+        inserted += 1
+
+    await session.flush()
+
+    return UploadResponse(
+        upload_id=str(csv_import.id),
+        total_rows=len(rows) + len(errors) + skipped_empty - duplicate_in_db,
+        valid=inserted,
+        invalid=len(errors),
+        skipped_empty=skipped_empty,
+        preview_rows=preview,
+        errors=errors,
+        committed=True,
+    )
+
+
+# ---------------------------------------------------------------------------
+# GET /contacts
+# ---------------------------------------------------------------------------
+
+
+@router.get("", response_model=ContactsListResponse)
+async def list_contacts(
+    search: str | None = Query(None, description="Match phone_e164 or full_name substring"),
+    branch_id: str | None = Query(None),
+    segment: str | None = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=100),
+    _: TenantContext = Depends(get_active_tenant_context),
+    session: AsyncSession = Depends(get_tenant_scoped_session),
+) -> ContactsListResponse:
+    stmt = select(Contact, Branch.name.label("branch_name")).join(
+        Branch, Branch.id == Contact.branch_id, isouter=True
+    )
+
+    if search:
+        like = f"%{search}%"
+        stmt = stmt.where(
+            (Contact.phone_e164.ilike(like)) | (Contact.full_name.ilike(like))
+        )
+    if branch_id:
+        try:
+            stmt = stmt.where(Contact.branch_id == uuid.UUID(branch_id))
+        except ValueError:
+            raise HTTPException(status_code=422, detail="branch_id must be a UUID")
+    if segment:
+        stmt = stmt.where(Contact.custom_fields["segment"].astext == segment)
+
+    # Total count for pagination
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    total = (await session.execute(count_stmt)).scalar_one()
+
+    # Page
+    stmt = stmt.order_by(Contact.created_at.desc()).offset(
+        (page - 1) * page_size
+    ).limit(page_size)
+    result = await session.execute(stmt)
+
+    rows: list[ContactRow] = []
+    for contact, branch_name in result.all():
+        rows.append(
+            ContactRow(
+                id=str(contact.id),
+                phone_e164=contact.phone_e164,
+                full_name=contact.full_name,
+                branch_id=str(contact.branch_id) if contact.branch_id else None,
+                branch_name=branch_name,
+                opt_in_status=contact.opt_in_status.value,
+                source=contact.source.value,
+                created_at=contact.created_at.isoformat(),
+            )
+        )
+
+    return ContactsListResponse(
+        data=rows,
+        pagination={"page": page, "page_size": page_size, "total": total},
+    )
+
+
+# ---------------------------------------------------------------------------
+# GET /contacts/count
+# ---------------------------------------------------------------------------
+
+
+@router.get("/count", response_model=CountResponse)
+async def contacts_count(
+    _: TenantContext = Depends(get_active_tenant_context),
+    session: AsyncSession = Depends(get_tenant_scoped_session),
+) -> CountResponse:
+    """Count of contacts for the active tenant — feeds the KPI card."""
+    result = await session.execute(select(func.count(Contact.id)))
+    return CountResponse(count=result.scalar_one())

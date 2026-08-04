@@ -18,6 +18,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api import router as api_router
 from app.config import settings
 from app.db import dispose_engine, ping
+from app.routes.contacts import router as contacts_router
+from app.routes.settings import router as tenant_settings_router
+from app.routes.templates import router as templates_router
 from app.webhooks import router as webhooks_router
 
 logging.basicConfig(
@@ -62,6 +65,9 @@ def create_app() -> FastAPI:
 
     app.include_router(webhooks_router)
     app.include_router(api_router)
+    app.include_router(templates_router)
+    app.include_router(contacts_router)
+    app.include_router(tenant_settings_router)
 
     return app
 

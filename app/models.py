@@ -542,3 +542,65 @@ class WebhookEvent(Base):
     received_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
     )
+
+
+# ---------------------------------------------------------------------------
+# Analytics + settings (migration 0002)
+# ---------------------------------------------------------------------------
+
+
+class CampaignStats(Base):
+    """Precomputed per-campaign aggregation. One row per campaign.
+
+    Written by the worker whenever a campaign_recipient status changes.
+    Read by the dashboard endpoints (KPI cards, activity chart, campaign
+    status donut) to avoid GROUP BY over campaign_recipients on every load.
+
+    Kept in the same tenant scope as campaigns via the tenant_id column
+    and the same RLS pattern.
+    """
+
+    __tablename__ = "campaign_stats"
+
+    campaign_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("campaigns.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    total_recipients: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_sent: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_delivered: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_read: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_failed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    avg_latency_ms: Mapped[Optional[int]] = mapped_column(Integer)
+    p95_latency_ms: Mapped[Optional[int]] = mapped_column(Integer)
+    last_updated: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class TenantSetting(Base):
+    """Per-tenant feature flags. One row per tenant.
+
+    Phase 1 has one flag (`allow_freeform_message_edit`, default False).
+    The row is optional — a tenant without a row uses the schema defaults.
+    """
+
+    __tablename__ = "tenant_settings"
+
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    allow_freeform_message_edit: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )

@@ -472,3 +472,94 @@ async def get_platform_admin_session(
                 is_platform_admin=True,
             )
             yield session
+
+
+# ---------------------------------------------------------------------------
+# Helper: get_user_memberships
+# ---------------------------------------------------------------------------
+
+
+async def get_user_memberships(user_id: uuid.UUID) -> list[dict[str, Any]]:
+    """Return every active tenant membership for a user, with tenant names.
+
+    Used by GET /me to populate the tenant switcher on the frontend. Not a
+    FastAPI dependency — just a plain helper, called directly from the route.
+
+    Each item: { "tenant_id": ..., "tenant_name": ..., "role": ... }
+    """
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            # A user reading their own memberships is always allowed. This is
+            # a cross-tenant read by nature (listing memberships across every
+            # tenant the user belongs to), so we use the platform-admin bypass
+            # for this one read — it's the user's own data, not a leak.
+            await session.execute(
+                text("SELECT set_config('app.is_platform_admin', 'true', true)")
+            )
+            result = await session.execute(
+                select(
+                    UserTenantMembership.tenant_id,
+                    Tenant.name,
+                    UserTenantMembership.role,
+                )
+                .join(Tenant, Tenant.id == UserTenantMembership.tenant_id)
+                .where(
+                    UserTenantMembership.user_id == user_id,
+                    UserTenantMembership.status == MembershipStatus.active,
+                )
+            )
+            return [
+                {
+                    "tenant_id": str(row.tenant_id),
+                    "tenant_name": row.name,
+                    "role": row.role.value,
+                }
+                for row in result.all()
+            ]
+
+
+# ---------------------------------------------------------------------------
+# Helper: get_user_memberships
+# ---------------------------------------------------------------------------
+
+
+async def get_user_memberships(user_id: uuid.UUID) -> list[dict[str, Any]]:
+    """Return every active tenant membership for a user, with tenant names.
+
+    Used by GET /me to populate the tenant switcher on the frontend. Not a
+    FastAPI dependency — just a plain helper, called directly from the route.
+
+    Each item: { "tenant_id": ..., "tenant_name": ..., "role": ... }
+    """
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            # A user reading their own memberships is always allowed — set
+            # current_user_id so the users_self_access-style pattern applies.
+            # user_tenant_memberships has no per-row tenant filter needed here
+            # since we filter by user_id directly and RLS on this table keys
+            # off current_tenant_id, so we use the platform-admin bypass for
+            # this one cross-tenant read (a user's own membership list is not
+            # a security-sensitive cross-tenant leak — it's their own data).
+            await session.execute(
+                text("SELECT set_config('app.is_platform_admin', 'true', true)")
+            )
+            result = await session.execute(
+                select(
+                    UserTenantMembership.tenant_id,
+                    Tenant.name,
+                    UserTenantMembership.role,
+                )
+                .join(Tenant, Tenant.id == UserTenantMembership.tenant_id)
+                .where(
+                    UserTenantMembership.user_id == user_id,
+                    UserTenantMembership.status == MembershipStatus.active,
+                )
+            )
+            return [
+                {
+                    "tenant_id": str(row.tenant_id),
+                    "tenant_name": row.name,
+                    "role": row.role.value,
+                }
+                for row in result.all()
+            ]

@@ -93,3 +93,30 @@ async def enqueue_webhook_process(
         job.job_id if job else None,
     )
     return job
+
+
+async def enqueue_materialize(
+    *,
+    campaign_id: uuid.UUID,
+    tenant_id: uuid.UUID,
+) -> Any:
+    """Enqueue materialize_campaign_task. Always bulk lane.
+
+    Called by POST /broadcasts/:id/send. The task itself expands audience,
+    inserts campaign_recipients, and fans out per-recipient send_message_task
+    calls on the campaign's own lane (transactional or bulk).
+    """
+    pool = await get_arq_pool()
+    job = await pool.enqueue_job(
+        "materialize_campaign_task",
+        str(campaign_id),
+        str(tenant_id),
+        _queue_name=_QUEUE_BULK,
+    )
+    logger.info(
+        "Enqueued materialize: campaign=%s tenant=%s job=%s",
+        campaign_id,
+        tenant_id,
+        job.job_id if job else None,
+    )
+    return job

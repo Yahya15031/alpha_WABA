@@ -32,11 +32,17 @@ from sqlalchemy import select, text
 from app.db import get_system_session, get_worker_session
 from app.meta import get_meta_client
 from app.models import (
+    AudienceType,
     Campaign,
+    CampaignLane,
     CampaignRecipient,
+    CampaignStatus,
+    Contact,
+    ContactOptInStatus,
     PhoneNumber,
     RecipientStatus,
     Template,
+    Tenant,
     WebhookEvent,
 )
 
@@ -129,6 +135,15 @@ async def send_message_task(
             recipient.status = RecipientStatus.sent
             recipient.meta_message_id = result.meta_message_id
             recipient.sent_at = datetime.now(timezone.utc)
+            # Bump stats — total_sent counter for the campaign
+            await session.execute(
+                text(
+                    "UPDATE campaign_stats "
+                    "SET total_sent = total_sent + 1, last_updated = now() "
+                    "WHERE campaign_id = :cid"
+                ),
+                {"cid": str(recipient.campaign_id)},
+            )
             logger.info(
                 "Sent: recipient=%s meta_msg=%s tenant=%s",
                 recipient_uuid,
@@ -155,6 +170,15 @@ async def send_message_task(
             recipient.error_code = result.error_code
             recipient.error_message = result.error_message
             recipient.failed_at = datetime.now(timezone.utc)
+            # Bump stats — total_failed counter for the campaign
+            await session.execute(
+                text(
+                    "UPDATE campaign_stats "
+                    "SET total_failed = total_failed + 1, last_updated = now() "
+                    "WHERE campaign_id = :cid"
+                ),
+                {"cid": str(recipient.campaign_id)},
+            )
             logger.warning(
                 "Send failed: recipient=%s http=%s code=%s msg=%s",
                 recipient_uuid,
@@ -324,21 +348,295 @@ async def _apply_status_updates(session, payload: dict) -> None:
         except (ValueError, TypeError):
             ts = datetime.now(timezone.utc)
 
+        old_status = recipient.status
+        new_status: RecipientStatus | None = None
+
         if status == "sent":
             recipient.status = RecipientStatus.sent
             recipient.sent_at = ts
+            new_status = RecipientStatus.sent
         elif status == "delivered":
             recipient.status = RecipientStatus.delivered
             recipient.delivered_at = ts
+            new_status = RecipientStatus.delivered
         elif status == "read":
             recipient.status = RecipientStatus.read
             recipient.read_at = ts
+            new_status = RecipientStatus.read
         elif status == "failed":
             recipient.status = RecipientStatus.failed
             recipient.failed_at = ts
+            new_status = RecipientStatus.failed
             errors = status_update.get("errors", [])
             if errors and isinstance(errors[0], dict):
                 recipient.error_code = errors[0].get("code")
                 recipient.error_message = errors[0].get("title") or errors[0].get(
                     "message"
                 )
+
+        if new_status is not None:
+            await _bump_campaign_stats(
+                session, recipient.campaign_id, old_status, new_status
+            )
+
+
+# ---------------------------------------------------------------------------
+# campaign_stats bump helper
+# ---------------------------------------------------------------------------
+
+
+# Success ladder — each level implies all lower levels were reached.
+# `failed` is a separate terminal state and doesn't sit on this ladder.
+_STATUS_LEVEL: dict[RecipientStatus, int] = {
+    RecipientStatus.pending: 0,
+    RecipientStatus.queued: 1,
+    RecipientStatus.sent: 2,
+    RecipientStatus.delivered: 3,
+    RecipientStatus.read: 4,
+    RecipientStatus.failed: -1,  # sentinel — off the ladder
+}
+
+
+async def _bump_campaign_stats(
+    session,
+    campaign_id: uuid.UUID,
+    old_status: RecipientStatus,
+    new_status: RecipientStatus,
+) -> None:
+    """Atomically increment campaign_stats counters based on the transition.
+
+    Rules:
+      - Terminal `failed` bumps total_failed only (once per recipient lifetime).
+      - Success ladder: transitioning from level A to level B increments
+        every counter for levels in (A, B]. Ex: pending→delivered bumps
+        total_sent AND total_delivered.
+      - Idempotent when old == new (nothing to increment).
+
+    Uses a single UPDATE with `= col + 1` clauses so concurrent updates on
+    different recipients of the same campaign don't clobber each other.
+    """
+    if old_status == new_status:
+        return
+
+    increments: list[str] = []
+
+    if new_status == RecipientStatus.failed:
+        if old_status != RecipientStatus.failed:
+            increments.append("total_failed = total_failed + 1")
+    else:
+        old_level = _STATUS_LEVEL.get(old_status, 0)
+        new_level = _STATUS_LEVEL.get(new_status, 0)
+        if new_level >= 2 and old_level < 2:
+            increments.append("total_sent = total_sent + 1")
+        if new_level >= 3 and old_level < 3:
+            increments.append("total_delivered = total_delivered + 1")
+        if new_level >= 4 and old_level < 4:
+            increments.append("total_read = total_read + 1")
+
+    if not increments:
+        return
+
+    sql = (
+        "UPDATE campaign_stats SET "
+        + ", ".join(increments)
+        + ", last_updated = now() WHERE campaign_id = :cid"
+    )
+    await session.execute(text(sql), {"cid": str(campaign_id)})
+
+
+# ---------------------------------------------------------------------------
+# materialize_campaign_task
+# ---------------------------------------------------------------------------
+
+
+def _resolve_variable(path: str, contact: Contact, tenant: Tenant) -> str:
+    """Resolve one variable_mapping value → concrete string.
+
+    Supported paths:
+      - `$literal:<text>`     — use the text after the colon verbatim
+      - `contact.<field>`     — read a field off the Contact row
+      - `custom.<key>`        — read from Contact.custom_fields JSON
+      - `tenant.<field>`      — read a field off the Tenant row
+    Unknown paths resolve to "" so the send doesn't crash — better an empty
+    variable than a failed campaign.
+    """
+    if not path:
+        return ""
+    if path.startswith("$literal:"):
+        return path[len("$literal:"):]
+    if path.startswith("contact."):
+        return str(getattr(contact, path[len("contact."):], "") or "")
+    if path.startswith("custom."):
+        return str((contact.custom_fields or {}).get(path[len("custom."):], ""))
+    if path.startswith("tenant."):
+        return str(getattr(tenant, path[len("tenant."):], "") or "")
+    return ""
+
+
+async def materialize_campaign_task(
+    ctx: dict,
+    campaign_id: str,
+    tenant_id: str,
+) -> dict[str, Any]:
+    """Expand a queued campaign into recipient rows + enqueue individual sends.
+
+    Runs on the bulk lane (one task per broadcast). Flow:
+
+      1. Load campaign under tenant scope.
+      2. Reject if not in `queued` state (defensive against re-runs).
+      3. Resolve audience → list of contacts.
+      4. Batch INSERT campaign_recipients with resolved_variables.
+      5. Set campaign_stats.total_recipients = N.
+      6. Flip campaign.status = running.
+      7. Fan out send_message_task per recipient on the campaign's lane.
+    """
+    campaign_uuid = uuid.UUID(campaign_id)
+    tenant_uuid = uuid.UUID(tenant_id)
+
+    # ---- Session: load, materialize, mark running ----
+    lane_for_sends: CampaignLane = CampaignLane.bulk
+    recipient_ids: list[uuid.UUID] = []
+
+    async with get_worker_session(tenant_uuid) as session:
+        campaign = await session.get(Campaign, campaign_uuid)
+        if campaign is None:
+            logger.error("materialize: campaign %s not found", campaign_uuid)
+            return {"success": False, "reason": "campaign_not_found"}
+
+        if campaign.status != CampaignStatus.queued:
+            logger.warning(
+                "materialize: campaign %s in status %s (expected queued); skipping",
+                campaign_uuid,
+                campaign.status.value,
+            )
+            return {
+                "success": False,
+                "reason": f"invalid_status:{campaign.status.value}",
+            }
+
+        tenant = await session.get(Tenant, tenant_uuid)
+        template = await session.get(Template, campaign.template_id)
+        if tenant is None or template is None:
+            logger.error(
+                "materialize: tenant %s or template %s missing",
+                tenant_uuid,
+                campaign.template_id,
+            )
+            return {"success": False, "reason": "tenant_or_template_missing"}
+
+        variable_mappings = dict(campaign.variable_mappings)
+        template_variables = list(template.variable_definitions or [])
+        audience_type = campaign.audience_type
+        audience_config = dict(campaign.audience_config)
+        branch_id = campaign.branch_id
+        lane_for_sends = campaign.lane
+
+        # ---- Resolve audience ----
+        stmt = select(Contact).where(
+            Contact.opt_in_status == ContactOptInStatus.opted_in
+        )
+        if audience_type == AudienceType.all_contacts:
+            stmt = stmt.where(Contact.branch_id == branch_id)
+        elif audience_type == AudienceType.branch_group:
+            # Phase 1: branch_group behaves like all_contacts for this branch.
+            # Extend later to multi-branch groups.
+            stmt = stmt.where(Contact.branch_id == branch_id)
+        elif audience_type == AudienceType.csv_upload:
+            upload_id_raw = audience_config.get("upload_id")
+            if not upload_id_raw:
+                logger.error(
+                    "materialize: csv_upload audience missing audience_config.upload_id"
+                )
+                return {"success": False, "reason": "missing_upload_id"}
+            try:
+                upload_uuid = uuid.UUID(upload_id_raw)
+            except (ValueError, TypeError):
+                return {"success": False, "reason": "invalid_upload_id"}
+            stmt = stmt.where(Contact.csv_import_id == upload_uuid)
+        else:
+            return {"success": False, "reason": "unknown_audience_type"}
+
+        contacts_result = await session.execute(stmt)
+        contacts = list(contacts_result.scalars().all())
+
+        if not contacts:
+            campaign.status = CampaignStatus.completed
+            await session.execute(
+                text(
+                    "UPDATE campaign_stats SET total_recipients = 0, last_updated = now() "
+                    "WHERE campaign_id = :cid"
+                ),
+                {"cid": str(campaign_uuid)},
+            )
+            logger.info("materialize: no recipients for campaign %s", campaign_uuid)
+            return {"success": True, "recipient_count": 0}
+
+        # ---- Build recipient rows with resolved template variables ----
+        for contact in contacts:
+            resolved: dict[str, str] = {}
+            for var_def in template_variables:
+                idx = str(var_def.get("index"))
+                if not idx:
+                    continue
+                path = variable_mappings.get(idx, "")
+                resolved[idx] = _resolve_variable(path, contact, tenant)
+
+            recipient = CampaignRecipient(
+                tenant_id=tenant_uuid,
+                campaign_id=campaign_uuid,
+                contact_id=contact.id,
+                phone_e164=contact.phone_e164,
+                resolved_variables=resolved,
+                status=RecipientStatus.pending,
+            )
+            session.add(recipient)
+
+        await session.flush()
+
+        # Grab the just-inserted IDs
+        id_result = await session.execute(
+            select(CampaignRecipient.id).where(
+                CampaignRecipient.campaign_id == campaign_uuid
+            )
+        )
+        recipient_ids = [rid for (rid,) in id_result.all()]
+
+        # ---- Stats + campaign status ----
+        await session.execute(
+            text(
+                "UPDATE campaign_stats SET total_recipients = :n, last_updated = now() "
+                "WHERE campaign_id = :cid"
+            ),
+            {"n": len(recipient_ids), "cid": str(campaign_uuid)},
+        )
+        campaign.status = CampaignStatus.running
+
+    # ---- Fan out send tasks (outside the DB transaction) ----
+    from app.workers.router import enqueue_send
+
+    enqueued = 0
+    for rid in recipient_ids:
+        try:
+            await enqueue_send(
+                campaign_recipient_id=rid,
+                tenant_id=tenant_uuid,
+                lane=lane_for_sends,
+            )
+            enqueued += 1
+        except Exception as exc:
+            # One failed enqueue shouldn't abort the whole broadcast — log and
+            # move on. The recipient row is still there and can be retried
+            # by a maintenance job later.
+            logger.exception(
+                "materialize: failed to enqueue send for recipient %s: %s",
+                rid,
+                exc,
+            )
+
+    logger.info(
+        "materialize: campaign %s → %d recipients enqueued on %s",
+        campaign_uuid,
+        enqueued,
+        lane_for_sends.value,
+    )
+    return {"success": True, "recipient_count": enqueued}

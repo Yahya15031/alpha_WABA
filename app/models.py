@@ -396,6 +396,9 @@ class Contact(Base):
         nullable=False,
         server_default=ContactSource.manual.value,
     )
+    csv_import_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("csv_imports.id", ondelete="SET NULL")
+    )
     created_at: Mapped[datetime] = _created_at()
     updated_at: Mapped[datetime] = _updated_at()
 

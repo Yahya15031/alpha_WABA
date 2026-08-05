@@ -14,7 +14,11 @@ from __future__ import annotations
 from arq.connections import RedisSettings
 
 from app.config import settings
-from app.workers.tasks import process_webhook_event_task, send_message_task
+from app.workers.tasks import (
+    materialize_campaign_task,
+    process_webhook_event_task,
+    send_message_task,
+)
 
 
 def _redis_settings() -> RedisSettings:
@@ -27,7 +31,11 @@ def _redis_settings() -> RedisSettings:
 
 # Shared function set — both lanes can process either kind of job. Routing
 # happens at enqueue time via the queue_name argument.
-_FUNCTIONS = [send_message_task, process_webhook_event_task]
+_FUNCTIONS = [
+    send_message_task,
+    process_webhook_event_task,
+    materialize_campaign_task,
+]
 
 
 class TransactionalWorkerSettings:

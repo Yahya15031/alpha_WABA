@@ -37,7 +37,14 @@ from app.auth import (
     get_current_user,
     get_tenant_scoped_session,
 )
-from app.models import Branch, Contact, ContactOptInStatus, ContactSource, CsvImport
+from app.models import (
+    Branch,
+    Contact,
+    ContactOptInStatus,
+    ContactSource,
+    CsvImport,
+    CsvImportStatus,
+)
 
 router = APIRouter(prefix="/contacts", tags=["contacts"])
 
@@ -220,6 +227,10 @@ async def _parse_csv(
 )
 async def upload_contacts(
     file: UploadFile = File(..., description="CSV file with a phone column"),
+    branch_id: str = Query(
+        ...,
+        description="UUID of the branch to attach these contacts to. Required.",
+    ),
     commit: bool = Query(False, description="False = preview only. True = write to DB."),
     ctx: TenantContext = Depends(get_active_tenant_context),
     current_user: CurrentUser = Depends(get_current_user),
@@ -228,6 +239,16 @@ async def upload_contacts(
     """Parse a CSV, validate every row, return a preview or commit to DB."""
     if not file.filename or not file.filename.lower().endswith((".csv", ".txt")):
         raise HTTPException(status_code=415, detail="File must be a .csv")
+
+    try:
+        branch_uuid = uuid.UUID(branch_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="branch_id must be a UUID")
+
+    # Confirm the branch exists in this tenant (RLS enforces tenant-scope)
+    branch = await session.get(Branch, branch_uuid)
+    if branch is None:
+        raise HTTPException(status_code=404, detail="Branch not found in this tenant")
 
     file_bytes = await file.read()
     if not file_bytes:
@@ -260,22 +281,18 @@ async def upload_contacts(
 
     # ---- Commit path ----
 
-    # Build a name → id lookup for branches so we can attach contacts.
-    branch_lookup: dict[str, uuid.UUID] = {}
-    branch_result = await session.execute(select(Branch.id, Branch.name))
-    for bid, bname in branch_result.all():
-        branch_lookup[bname.lower()] = bid
-
     # Record the import job first.
     csv_import = CsvImport(
         tenant_id=ctx.tenant_id,
-        filename=file.filename,
+        branch_id=branch_uuid,
         uploaded_by=current_user.id,
+        filename=file.filename,
+        storage_path=f"inline://{file.filename}",  # we don't archive to blob storage in Phase 1
+        status=CsvImportStatus.completed,
         total_rows=len(rows) + len(errors) + skipped_empty,
         valid_rows=len(rows),
         invalid_rows=len(errors),
-        error_report=[e.model_dump() for e in errors] if errors else [],
-        status="completed",  # type: ignore[arg-type]
+        error_report={"errors": [e.model_dump() for e in errors]} if errors else None,
     )
     session.add(csv_import)
     await session.flush()
@@ -298,18 +315,14 @@ async def upload_contacts(
             )
             continue
 
-        branch_id = None
-        if r.get("branch"):
-            branch_id = branch_lookup.get(r["branch"].lower())
-
-        custom_fields = {}
+        custom_fields: dict[str, Any] = {}
         if r.get("segment"):
             custom_fields["segment"] = r["segment"]
 
         session.add(
             Contact(
                 tenant_id=ctx.tenant_id,
-                branch_id=branch_id,
+                branch_id=branch_uuid,
                 phone_e164=r["phone_e164"],
                 full_name=r.get("full_name"),
                 opt_in_status=ContactOptInStatus.opted_in,

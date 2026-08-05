@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Contacts CSV Builder — Alpha WABA</title>
+  <style>
+    :root {
+      --bg: #0b1220;
+      --panel: #151b2c;
+      --border: #262d40;
+      --text: #e6e9f0;
+      --muted: #8891a5;
+      --accent: #4f8cff;
+      --success: #22c55e;
+      --error: #ef4444;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      margin: 0;
+      padding: 32px 24px;
+      min-height: 100vh;
+      line-height: 1.5;
+    }
+    .container { max-width: 900px; margin: 0 auto; }
+    header { margin-bottom: 24px; }
+    h1 { margin: 0 0 6px; font-size: 22px; font-weight: 600; }
+    .subtitle { color: var(--muted); font-size: 13px; }
+    .subtitle code {
+      background: var(--panel);
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-size: 12px;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 16px;
+    }
+
+    label {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 13px;
+      color: var(--muted);
+      font-weight: 500;
+    }
+
+    textarea {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      padding: 12px;
+      font-family: ui-monospace, "SF Mono", Monaco, Consolas, monospace;
+      font-size: 12px;
+      min-height: 220px;
+      resize: vertical;
+    }
+    textarea:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+
+    input[type="text"] {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      padding: 8px 12px;
+      font-family: ui-monospace, "SF Mono", Monaco, Consolas, monospace;
+      font-size: 13px;
+      width: 140px;
+    }
+    input[type="text"]:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+
+    .controls-row {
+      display: flex;
+      gap: 20px;
+      align-items: flex-end;
+      flex-wrap: wrap;
+      margin-top: 14px;
+    }
+    .controls-row > div { flex-shrink: 0; }
+
+    button {
+      background: var(--accent);
+      color: white;
+      border: none;
+      padding: 10px 18px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 500;
+      font-family: inherit;
+      transition: opacity 0.15s;
+    }
+    button:hover { opacity: 0.9; }
+    button.secondary {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+    button.ghost {
+      background: transparent;
+      color: var(--muted);
+      padding: 8px 12px;
+      font-size: 12px;
+    }
+    button.ghost:hover { color: var(--text); }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .stat {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 14px 16px;
+    }
+    .stat-label {
+      font-size: 11px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      font-weight: 500;
+    }
+    .stat-value { font-size: 26px; font-weight: 600; margin-top: 4px; font-variant-numeric: tabular-nums; }
+    .stat.success .stat-value { color: var(--success); }
+    .stat.error .stat-value { color: var(--error); }
+
+    .preview {
+      max-height: 300px;
+      overflow-y: auto;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 4px;
+    }
+    .preview-row {
+      padding: 6px 10px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid var(--border);
+      font-family: ui-monospace, "SF Mono", Monaco, Consolas, monospace;
+      font-size: 12px;
+    }
+    .preview-row:last-child { border-bottom: none; }
+    .preview-row .status {
+      font-size: 10px;
+      padding: 2px 7px;
+      border-radius: 3px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      font-weight: 500;
+    }
+    .preview-row .status.valid { background: rgba(34, 197, 94, 0.15); color: var(--success); }
+    .preview-row .status.invalid { background: rgba(239, 68, 68, 0.15); color: var(--error); }
+    .preview-row.overflow { color: var(--muted); font-style: italic; }
+
+    .actions {
+      display: flex;
+      gap: 10px;
+      margin-top: 16px;
+      flex-wrap: wrap;
+    }
+
+    .hint {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 8px;
+      line-height: 1.6;
+    }
+    .hint code {
+      background: var(--bg);
+      padding: 1px 5px;
+      border-radius: 3px;
+      font-size: 11px;
+    }
+
+    .kbd {
+      display: inline-block;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      padding: 1px 5px;
+      font-family: ui-monospace, monospace;
+      font-size: 11px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Contacts CSV Builder</h1>
+      <div class="subtitle">
+        Paste numbers → download a CSV that <code>/contacts/upload</code> accepts.
+        Handles comma-separated, one-per-line, Excel copy-paste, international numbers, extra whitespace.
+      </div>
+    </header>
+
+    <div class="panel">
+      <label for="input">Paste numbers here</label>
+      <textarea id="input" placeholder="Any of these formats work:
+
++923025550109, +923035550110, +923055550111
++14155552671
++441632960123
+03025550109         (will be prefixed with default country code if set)
++92 302 555 0109    (spaces stripped automatically)
+=&quot;923025550109&quot;      (Excel export junk stripped too)
+
+Separate numbers with commas, newlines, spaces, tabs, or semicolons.
+Ctrl+Enter to parse."></textarea>
+
+      <div class="controls-row">
+        <div>
+          <label for="cc">Default country code</label>
+          <input type="text" id="cc" placeholder="+92" value="+92">
+        </div>
+        <div>
+          <button onclick="parse()">Parse &amp; preview</button>
+          <button class="ghost" onclick="loadSample()">Load sample</button>
+          <button class="ghost" onclick="clearAll()">Clear</button>
+        </div>
+      </div>
+      <div class="hint">
+        Default country code is only used when a number starts with <code>0</code> (a local-format number).
+        Numbers that already have <code>+</code> or start with a country digit are left alone.
+        Leave blank to reject all local-format numbers.
+      </div>
+    </div>
+
+    <div class="stats" id="stats" style="display:none;">
+      <div class="stat">
+        <div class="stat-label">Total pasted</div>
+        <div class="stat-value" id="totalCount">0</div>
+      </div>
+      <div class="stat success">
+        <div class="stat-label">Valid E.164</div>
+        <div class="stat-value" id="validCount">0</div>
+      </div>
+      <div class="stat error">
+        <div class="stat-label">Rejected</div>
+        <div class="stat-value" id="invalidCount">0</div>
+      </div>
+    </div>
+
+    <div class="panel" id="previewPanel" style="display:none;">
+      <label>Preview</label>
+      <div class="preview" id="preview"></div>
+
+      <div class="actions">
+        <button onclick="downloadCsv('phone-only')">Download phone-only CSV</button>
+        <button class="secondary" onclick="downloadCsv('full')">Download full-shape CSV</button>
+      </div>
+      <div class="hint">
+        <strong>Phone-only:</strong> single column <code>phone</code>. Matches the minimum the backend needs.<br>
+        <strong>Full-shape:</strong> columns <code>phone, full_name, segment, branch</code> with the last three left blank.
+        Use this if you want to open the CSV in Excel and add names before uploading.
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let validNumbers = [];
+    let invalidRaws = [];
+
+    // E.164: starts with +, first digit 1-9, then 1-14 more digits. Max 15 digits total.
+    const E164_RE = /^\+[1-9]\d{1,14}$/;
+
+    function normalizeNumber(raw, defaultCc) {
+      // Strip whitespace, quotes (single/double/backtick), dashes, dots, parens, equals sign
+      let clean = raw.replace(/[\s"'`\-\.\(\)=]/g, '');
+      if (!clean) return null;
+
+      // Excel sometimes wraps values as ="..." — the = would already be stripped above,
+      // but handle leading = in case something else added it
+      if (clean.startsWith('=')) clean = clean.slice(1);
+
+      // Already E.164
+      if (clean.startsWith('+')) return clean;
+
+      // 00 prefix (European international convention) — treat as +
+      if (clean.startsWith('00')) return '+' + clean.slice(2);
+
+      // Local-format number: starts with 0, use default country code
+      if (defaultCc && clean.startsWith('0')) {
+        return defaultCc + clean.slice(1);
+      }
+
+      // Bare digits (e.g. 923025550109 from Excel that stripped the +)
+      if (/^\d/.test(clean)) return '+' + clean;
+
+      return null;
+    }
+
+    function parse() {
+      const input = document.getElementById('input').value;
+      let cc = document.getElementById('cc').value.trim();
+      if (cc && !cc.startsWith('+')) cc = '+' + cc;
+
+      // Split on: comma, newline, tab, semicolon, or 2+ spaces (so "302 555 0109" stays together)
+      const tokens = input
+        .split(/[,\n\r\t;]+|\s{2,}/)
+        .map(t => t.trim())
+        .filter(t => t.length > 0);
+
+      const seen = new Set();
+      validNumbers = [];
+      invalidRaws = [];
+
+      for (const tok of tokens) {
+        const normalized = normalizeNumber(tok, cc);
+        if (normalized && E164_RE.test(normalized)) {
+          if (!seen.has(normalized)) {
+            seen.add(normalized);
+            validNumbers.push(normalized);
+          }
+        } else {
+          invalidRaws.push(tok);
+        }
+      }
+
+      document.getElementById('stats').style.display = 'grid';
+      document.getElementById('previewPanel').style.display = 'block';
+      document.getElementById('totalCount').textContent = tokens.length;
+      document.getElementById('validCount').textContent = validNumbers.length;
+      document.getElementById('invalidCount').textContent = invalidRaws.length;
+
+      renderPreview();
+    }
+
+    function renderPreview() {
+      const preview = document.getElementById('preview');
+      preview.innerHTML = '';
+
+      const showValid = validNumbers.slice(0, 40);
+      const showInvalid = invalidRaws.slice(0, 10);
+
+      for (const n of showValid) {
+        const row = document.createElement('div');
+        row.className = 'preview-row';
+        row.innerHTML = `<span>${n}</span><span class="status valid">valid</span>`;
+        preview.appendChild(row);
+      }
+      for (const n of showInvalid) {
+        const row = document.createElement('div');
+        row.className = 'preview-row';
+        const escaped = document.createElement('span');
+        escaped.textContent = n || '(empty)';
+        row.appendChild(escaped);
+        const badge = document.createElement('span');
+        badge.className = 'status invalid';
+        badge.textContent = 'rejected';
+        row.appendChild(badge);
+        preview.appendChild(row);
+      }
+
+      const totalShown = showValid.length + showInvalid.length;
+      const totalHave = validNumbers.length + invalidRaws.length;
+      if (totalShown < totalHave) {
+        const row = document.createElement('div');
+        row.className = 'preview-row overflow';
+        row.textContent = `… and ${totalHave - totalShown} more not shown`;
+        preview.appendChild(row);
+      }
+
+      if (totalHave === 0) {
+        preview.innerHTML = '<div class="preview-row overflow">Nothing to preview yet</div>';
+      }
+    }
+
+    function downloadCsv(mode) {
+      if (validNumbers.length === 0) {
+        alert('No valid numbers to export. Paste some numbers and click Parse first.');
+        return;
+      }
+
+      let csv;
+      let filename;
+      const timestamp = new Date().toISOString().slice(0, 10);
+
+      if (mode === 'phone-only') {
+        csv = 'phone\r\n' + validNumbers.join('\r\n') + '\r\n';
+        filename = `contacts_${timestamp}_${validNumbers.length}.csv`;
+      } else {
+        csv = 'phone,full_name,segment,branch\r\n';
+        for (const n of validNumbers) {
+          csv += `${n},,,\r\n`;
+        }
+        filename = `contacts_full_${timestamp}_${validNumbers.length}.csv`;
+      }
+
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+
+    function loadSample() {
+      document.getElementById('input').value =
+        `+923025550109, +923035550110, +923055550111, +923075550112, +923215550113
++923405550114
++923415550115
++923425550116
++14155552671
++441632960123
++819012345678
++61491570006
+03005550117
+=923005550118
++92 300 555 0119
++92-300-555-0120`;
+      parse();
+    }
+
+    function clearAll() {
+      document.getElementById('input').value = '';
+      document.getElementById('stats').style.display = 'none';
+      document.getElementById('previewPanel').style.display = 'none';
+      validNumbers = [];
+      invalidRaws = [];
+    }
+
+    // Keyboard shortcuts
+    document.getElementById('input').addEventListener('keydown', (e) => {
+      if (e.ctrlKey && e.key === 'Enter') {
+        e.preventDefault();
+        parse();
+      }
+    });
+    document.getElementById('cc').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        parse();
+      }
+    });
+  </script>
+</body>
+</html>

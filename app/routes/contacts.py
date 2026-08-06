@@ -326,7 +326,7 @@ async def upload_contacts(
                 phone_e164=r["phone_e164"],
                 full_name=r.get("full_name"),
                 opt_in_status=ContactOptInStatus.opted_in,
-                source=ContactSource.csv_upload,
+                source=ContactSource.csv_import,
                 custom_fields=custom_fields,
                 csv_import_id=csv_import.id,
             )

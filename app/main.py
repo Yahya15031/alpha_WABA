@@ -23,10 +23,6 @@ from app.db import dispose_engine, ping
 from app.routes import router as routes_router
 from app.webhooks import router as webhooks_router
 
-@app.exception_handler(Exception)
-async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-    logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
-    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 logging.basicConfig(
     level=settings.log_level,
@@ -56,6 +52,7 @@ def create_app() -> FastAPI:
         title="Alpha WABA API",
         version="0.1.0",
         lifespan=lifespan,
+
     )
 
     # CORS — the frontend will call from a different origin. Configured via
@@ -67,6 +64,11 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    @app.exception_handler(Exception)
+    async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+        logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
+        return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
     app.include_router(webhooks_router)
     app.include_router(api_router)

@@ -14,12 +14,19 @@ from typing import AsyncIterator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from fastapi import Request
 
 from app.api import router as api_router
 from app.config import settings
 from app.db import dispose_engine, ping
 from app.routes import router as routes_router
 from app.webhooks import router as webhooks_router
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 logging.basicConfig(
     level=settings.log_level,

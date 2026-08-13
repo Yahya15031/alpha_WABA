@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   LayoutDashboard, Users, Megaphone, FileText, BarChart2,
   Settings, LogOut, ChevronDown, Search, Filter, Plus,
@@ -13,8 +13,15 @@ import {
 } from "recharts";
 
 import { FullPageLoader, LoginScreen, useAuth } from "../auth";
-import { useBranches, useDashboard } from "./hooks";
+import {
+  useBranches,
+  useContacts,
+  useContactsCount,
+  useUploadContacts,
+  useDashboard,
+} from "./hooks";
 import type { CampaignStatusCounts, LatestBroadcast } from "../api";
+import type { UploadResponse } from "../api";
 
 // ─── Static UI data (unchanged mocks kept for screens not yet wired) ─────────
 
@@ -725,137 +732,414 @@ function DashboardScreen() {
 
 function ContactsScreen() {
   const [search, setSearch] = useState("");
-  const [selectedIds, setSelectedIds] = useState<number[]>([]);
-  const [branchFilter, setBranchFilter] = useState("All Branches");
-  const [branchOpen, setBranchOpen] = useState(false);
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [branchFilter, setBranchFilter] = useState<string>("");
   const [page, setPage] = useState(1);
+  const [pendingPreview, setPendingPreview] = useState<{
+    file: File;
+    branchId: string;
+    preview: UploadResponse;
+  } | null>(null);
+  const [uploadResult, setUploadResult] = useState<UploadResponse | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  const branchOptions = ["All Branches", "New York Office", "London Branch", "Remote Team"];
-
-  const filtered = contacts.filter((c) => {
-    const q = search.toLowerCase();
-    return (c.name.toLowerCase().includes(q) || c.phone.includes(q)) &&
-      (branchFilter === "All Branches" || c.branch === branchFilter);
+  const { branches } = useBranches();
+  const { count: countData } = useContactsCount() as { count: number | null };
+  const { data, loading, error, refresh } = useContacts({
+    search: debouncedSearch || undefined,
+    branch_id: branchFilter || undefined,
+    page,
+    page_size: 25,
   });
+  const { upload, uploading } = useUploadContacts();
 
-  const toggleId = (id: number) =>
-    setSelectedIds((p) => p.includes(id) ? p.filter((x) => x !== id) : [...p, id]);
+  // Debounce search (300ms) so we don't fire a request every keystroke.
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 300);
+    return () => clearTimeout(t);
+  }, [search]);
 
-  const allSelected = filtered.length > 0 && selectedIds.length === filtered.length;
-  const toggleAll = () => setSelectedIds(allSelected ? [] : filtered.map((c) => c.id));
+  // Reset to page 1 whenever the filter set changes.
+  useEffect(() => {
+    setPage(1);
+  }, [debouncedSearch, branchFilter]);
+
+  const handleFileChosen = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    // Reset so re-choosing the same file still triggers change.
+    e.target.value = "";
+    const branchId = branchFilter || branches[0]?.id;
+    if (!branchId) {
+      alert("Please select a branch before uploading contacts.");
+      return;
+    }
+    try {
+      const preview = await upload(file, branchId, false);
+      setPendingPreview({ file, branchId, preview });
+    } catch (err) {
+      alert(`Upload failed: ${(err as Error).message}`);
+    }
+  };
+
+  const confirmCommit = async () => {
+    if (!pendingPreview) return;
+    try {
+      const result = await upload(
+        pendingPreview.file,
+        pendingPreview.branchId,
+        true,
+      );
+      setUploadResult(result);
+      setPendingPreview(null);
+      refresh();
+    } catch (err) {
+      alert(`Commit failed: ${(err as Error).message}`);
+    }
+  };
+
+  const contacts = data?.data ?? [];
+  const total = data?.pagination.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / 25));
 
   return (
-    <>
-      <MockDataBanner label="Contacts" />
-      <div
-        className="flex flex-col gap-5 p-4 sm:p-6 lg:p-8 w-full"
-        onClick={() => setBranchOpen(false)}
-      >
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="flex flex-col gap-1 min-w-0">
-            <h1 className="text-lg sm:text-xl font-semibold" style={{ color: "#0F172A" }}>Contact Directory</h1>
-            <div className="flex flex-wrap items-center gap-1.5">
-              <span className="text-xs px-2 py-0.5 rounded-full font-medium" style={{ background: "#F1F5F9", color: "#475569" }}>{branchFilter}</span>
-            </div>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <button className="flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium text-white transition-opacity hover:opacity-90"
-              style={{ background: "#2563EB", boxShadow: "0 1px 3px rgba(37,99,235,0.4)" }}>
-              <Upload size={14} /> Import CSV
-            </button>
-          </div>
+    <div className="p-6 max-w-7xl mx-auto">
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-2xl font-semibold" style={{ color: "#0F172A" }}>
+            Contacts
+          </h1>
+          <p className="text-sm mt-1" style={{ color: "#64748B" }}>
+            {countData !== null
+              ? `${countData.toLocaleString()} total contacts`
+              : "Loading count…"}
+          </p>
         </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="flex-1 min-w-[200px] relative">
-            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: "#94A3B8" }} />
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search by name or number..."
-              className="w-full pl-9 pr-4 py-2.5 text-sm rounded-md outline-none"
-              style={{ border: "1px solid #E2E8F0", background: "#fff", color: "#1E293B" }}
-            />
-          </div>
-
-          <div className="relative" onClick={(e) => e.stopPropagation()}>
-            <button onClick={() => setBranchOpen(!branchOpen)}
-              className="flex items-center gap-2 px-3 py-2.5 rounded-md text-sm font-medium whitespace-nowrap"
-              style={{ border: "1px solid #E2E8F0", color: "#374151", background: "#fff" }}>
-              <Building2 size={14} style={{ color: "#94A3B8" }} />
-              {branchFilter}
-              <ChevronDown size={13} style={{ color: "#94A3B8" }} />
-            </button>
-            {branchOpen && (
-              <div className="absolute right-0 top-full mt-1.5 w-48 bg-white rounded-md z-30 overflow-hidden" style={{ border: "1px solid #E2E8F0" }}>
-                {branchOptions.map((b) => (
-                  <button key={b} onClick={() => { setBranchFilter(b); setBranchOpen(false); }}
-                    className="w-full text-left px-3 py-2.5 text-sm hover:bg-slate-50"
-                    style={{ color: branchFilter === b ? "#2563EB" : "#374151", background: branchFilter === b ? "#EFF6FF" : "transparent" }}>
-                    {b}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-
-        <div className="bg-white rounded-lg overflow-hidden" style={{ border: "1px solid #E2E8F0" }}>
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[640px]">
-              <thead>
-                <tr style={{ borderBottom: "1px solid #F1F5F9", background: "#FAFBFC" }}>
-                  <th className="pl-5 pr-3 py-3">
-                    <div onClick={toggleAll} className="w-4 h-4 rounded cursor-pointer flex items-center justify-center"
-                      style={{ border: allSelected ? "none" : "1px solid #CBD5E1", background: allSelected ? "#2563EB" : "transparent" }}>
-                      {allSelected && <Check size={10} className="text-white" />}
-                    </div>
-                  </th>
-                  {["Name", "Phone Number", "Branch", "Created", "Status"].map((h) => (
-                    <th key={h} className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wider whitespace-nowrap" style={{ color: "#94A3B8" }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map((contact, i) => {
-                  const sel = selectedIds.includes(contact.id);
-                  return (
-                    <tr key={contact.id}
-                      style={{ borderBottom: i < filtered.length - 1 ? "1px solid #F8FAFC" : "none", background: sel ? "#F5F8FF" : "transparent" }}>
-                      <td className="pl-5 pr-3 py-4">
-                        <div onClick={() => toggleId(contact.id)} className="w-4 h-4 rounded cursor-pointer flex items-center justify-center"
-                          style={{ border: sel ? "none" : "1px solid #CBD5E1", background: sel ? "#2563EB" : "transparent" }}>
-                          {sel && <Check size={10} className="text-white" />}
-                        </div>
-                      </td>
-                      <td className="px-4 py-4">
-                        <div className="flex items-center gap-2.5">
-                          <div className="w-8 h-8 rounded-full flex items-center justify-center text-[11px] font-semibold" style={{ background: "#E2E8F0", color: "#475569" }}>
-                            {initials(contact.name)}
-                          </div>
-                          <span className="text-sm font-medium whitespace-nowrap" style={{ color: "#1E293B" }}>{contact.name}</span>
-                        </div>
-                      </td>
-                      <td className="px-4 py-4">
-                        <span className="text-sm whitespace-nowrap" style={{ fontFamily: "ui-monospace,monospace", color: "#475569" }}>{contact.phone}</span>
-                      </td>
-                      <td className="px-4 py-4">
-                        <span className="inline-flex items-center gap-1.5 text-xs px-2 py-1 rounded-full font-medium whitespace-nowrap" style={{ background: "#F1F5F9", color: "#475569" }}>
-                          <Building2 size={10} style={{ color: "#94A3B8" }} />
-                          {contact.branch}
-                        </span>
-                      </td>
-                      <td className="px-4 py-4 text-sm whitespace-nowrap" style={{ color: "#64748B" }}>{contact.created}</td>
-                      <td className="px-4 py-4"><StatusBadge status={contact.status} /></td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+        <div>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".csv,.txt"
+            onChange={handleFileChosen}
+            style={{ display: "none" }}
+          />
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploading || branches.length === 0}
+            className="px-4 py-2 rounded-md text-sm font-medium text-white flex items-center gap-2"
+            style={{
+              background:
+                uploading || branches.length === 0 ? "#CBD5E1" : "#2563EB",
+              cursor:
+                uploading || branches.length === 0 ? "not-allowed" : "pointer",
+            }}
+          >
+            <Upload size={16} />
+            {uploading ? "Uploading…" : "Import CSV"}
+          </button>
         </div>
       </div>
-    </>
+
+      {/* Filters */}
+      <div className="flex gap-3 mb-4">
+        <div className="relative flex-1 max-w-md">
+          <Search
+            size={16}
+            className="absolute left-3 top-1/2 -translate-y-1/2"
+            style={{ color: "#94A3B8" }}
+          />
+          <input
+            type="text"
+            placeholder="Search by name or phone…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="w-full pl-10 pr-3 py-2 text-sm rounded-md outline-none"
+            style={{ border: "1px solid #E2E8F0", background: "#fff" }}
+          />
+        </div>
+        <select
+          value={branchFilter}
+          onChange={(e) => setBranchFilter(e.target.value)}
+          className="px-3 py-2 text-sm rounded-md outline-none"
+          style={{ border: "1px solid #E2E8F0", background: "#fff" }}
+        >
+          <option value="">All branches</option>
+          {branches.map((b) => (
+            <option key={b.id} value={b.id}>
+              {b.name}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {/* Upload result banner */}
+      {uploadResult && (
+        <div
+          className="mb-4 p-3 rounded-md text-sm flex items-start justify-between"
+          style={{
+            background: "#F0FDF4",
+            border: "1px solid #BBF7D0",
+            color: "#166534",
+          }}
+        >
+          <span>
+            Imported <strong>{uploadResult.valid}</strong> contacts
+            {uploadResult.invalid > 0 &&
+              `, ${uploadResult.invalid} rejected`}
+            {uploadResult.skipped_empty > 0 &&
+              `, ${uploadResult.skipped_empty} empty rows skipped`}
+            .
+          </span>
+          <button onClick={() => setUploadResult(null)}>
+            <X size={16} />
+          </button>
+        </div>
+      )}
+
+      {/* Table */}
+      <div
+        className="rounded-lg overflow-hidden"
+        style={{ border: "1px solid #E2E8F0", background: "#fff" }}
+      >
+        {error && (
+          <div className="p-4 text-sm" style={{ color: "#B91C1C" }}>
+            Failed to load contacts: {error}
+          </div>
+        )}
+        {loading && !data && (
+          <div className="p-8 text-center text-sm" style={{ color: "#64748B" }}>
+            Loading contacts…
+          </div>
+        )}
+        {!loading && contacts.length === 0 && !error && (
+          <div className="p-8 text-center text-sm" style={{ color: "#64748B" }}>
+            No contacts match these filters. Import a CSV to get started.
+          </div>
+        )}
+        {contacts.length > 0 && (
+          <table className="w-full text-sm">
+            <thead style={{ background: "#F8FAFC" }}>
+              <tr>
+                <th className="text-left px-4 py-2 font-medium" style={{ color: "#475569" }}>Name</th>
+                <th className="text-left px-4 py-2 font-medium" style={{ color: "#475569" }}>Phone</th>
+                <th className="text-left px-4 py-2 font-medium" style={{ color: "#475569" }}>Branch</th>
+                <th className="text-left px-4 py-2 font-medium" style={{ color: "#475569" }}>Opt-in</th>
+                <th className="text-left px-4 py-2 font-medium" style={{ color: "#475569" }}>Source</th>
+                <th className="text-left px-4 py-2 font-medium" style={{ color: "#475569" }}>Added</th>
+              </tr>
+            </thead>
+            <tbody>
+              {contacts.map((c) => (
+                <tr key={c.id} style={{ borderTop: "1px solid #F1F5F9" }}>
+                  <td className="px-4 py-2" style={{ color: "#0F172A" }}>
+                    {c.full_name ?? "—"}
+                  </td>
+                  <td className="px-4 py-2 font-mono text-xs" style={{ color: "#334155" }}>
+                    {c.phone_e164}
+                  </td>
+                  <td className="px-4 py-2" style={{ color: "#475569" }}>
+                    {c.branch_name ?? "—"}
+                  </td>
+                  <td className="px-4 py-2" style={{ color: "#475569" }}>
+                    {c.opt_in_status}
+                  </td>
+                  <td className="px-4 py-2" style={{ color: "#475569" }}>
+                    {c.source}
+                  </td>
+                  <td className="px-4 py-2" style={{ color: "#64748B" }}>
+                    {new Date(c.created_at).toLocaleDateString()}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {/* Pagination */}
+      {total > 25 && (
+        <div className="flex items-center justify-between mt-4 text-sm">
+          <span style={{ color: "#64748B" }}>
+            Page {page} of {totalPages} — {total.toLocaleString()} total
+          </span>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={page === 1}
+              className="px-3 py-1 rounded-md"
+              style={{
+                border: "1px solid #E2E8F0",
+                background: "#fff",
+                color: page === 1 ? "#CBD5E1" : "#0F172A",
+                cursor: page === 1 ? "not-allowed" : "pointer",
+              }}
+            >
+              Previous
+            </button>
+            <button
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={page >= totalPages}
+              className="px-3 py-1 rounded-md"
+              style={{
+                border: "1px solid #E2E8F0",
+                background: "#fff",
+                color: page >= totalPages ? "#CBD5E1" : "#0F172A",
+                cursor: page >= totalPages ? "not-allowed" : "pointer",
+              }}
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Preview dialog */}
+      {pendingPreview && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(15,23,42,0.5)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 24,
+            zIndex: 100,
+          }}
+        >
+          <div
+            className="rounded-lg max-w-2xl w-full max-h-[80vh] overflow-hidden flex flex-col"
+            style={{ background: "#fff" }}
+          >
+            <div
+              className="p-4 flex items-center justify-between"
+              style={{ borderBottom: "1px solid #E2E8F0" }}
+            >
+              <h2 className="font-semibold" style={{ color: "#0F172A" }}>
+                CSV Import Preview
+              </h2>
+              <button onClick={() => setPendingPreview(null)}>
+                <X size={16} />
+              </button>
+            </div>
+            <div className="p-4 overflow-y-auto flex-1">
+              <div className="grid grid-cols-4 gap-3 mb-4 text-sm">
+                <div>
+                  <div style={{ color: "#64748B" }}>Total rows</div>
+                  <div className="font-semibold" style={{ color: "#0F172A" }}>
+                    {pendingPreview.preview.total_rows}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ color: "#64748B" }}>Valid</div>
+                  <div className="font-semibold" style={{ color: "#16A34A" }}>
+                    {pendingPreview.preview.valid}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ color: "#64748B" }}>Invalid</div>
+                  <div className="font-semibold" style={{ color: "#DC2626" }}>
+                    {pendingPreview.preview.invalid}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ color: "#64748B" }}>Empty skipped</div>
+                  <div className="font-semibold" style={{ color: "#64748B" }}>
+                    {pendingPreview.preview.skipped_empty}
+                  </div>
+                </div>
+              </div>
+
+              {pendingPreview.preview.preview_rows.length > 0 && (
+                <div className="mb-4">
+                  <div
+                    className="text-xs uppercase font-medium mb-2"
+                    style={{ color: "#64748B" }}
+                  >
+                    First {pendingPreview.preview.preview_rows.length} valid rows
+                  </div>
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr>
+                        <th className="text-left py-1" style={{ color: "#475569" }}>Row</th>
+                        <th className="text-left py-1" style={{ color: "#475569" }}>Phone</th>
+                        <th className="text-left py-1" style={{ color: "#475569" }}>Name</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {pendingPreview.preview.preview_rows.map((r) => (
+                        <tr key={r.row}>
+                          <td className="py-1" style={{ color: "#64748B" }}>{r.row}</td>
+                          <td className="py-1 font-mono" style={{ color: "#334155" }}>{r.phone_e164}</td>
+                          <td className="py-1" style={{ color: "#334155" }}>{r.full_name ?? "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {pendingPreview.preview.errors.length > 0 && (
+                <div>
+                  <div
+                    className="text-xs uppercase font-medium mb-2"
+                    style={{ color: "#DC2626" }}
+                  >
+                    Rejected rows (first {Math.min(10, pendingPreview.preview.errors.length)})
+                  </div>
+                  <table className="w-full text-xs">
+                    <tbody>
+                      {pendingPreview.preview.errors.slice(0, 10).map((e, i) => (
+                        <tr key={i}>
+                          <td className="py-1" style={{ color: "#64748B" }}>Row {e.row}</td>
+                          <td className="py-1 font-mono" style={{ color: "#334155" }}>{e.phone_raw ?? "(empty)"}</td>
+                          <td className="py-1" style={{ color: "#DC2626" }}>{e.reason}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+            <div
+              className="p-4 flex justify-end gap-2"
+              style={{ borderTop: "1px solid #E2E8F0" }}
+            >
+              <button
+                onClick={() => setPendingPreview(null)}
+                className="px-4 py-2 rounded-md text-sm"
+                style={{
+                  border: "1px solid #E2E8F0",
+                  background: "#fff",
+                  color: "#0F172A",
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmCommit}
+                disabled={uploading || pendingPreview.preview.valid === 0}
+                className="px-4 py-2 rounded-md text-sm font-medium text-white"
+                style={{
+                  background:
+                    uploading || pendingPreview.preview.valid === 0
+                      ? "#CBD5E1"
+                      : "#2563EB",
+                  cursor:
+                    uploading || pendingPreview.preview.valid === 0
+                      ? "not-allowed"
+                      : "pointer",
+                }}
+              >
+                {uploading
+                  ? "Importing…"
+                  : `Import ${pendingPreview.preview.valid} contacts`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 

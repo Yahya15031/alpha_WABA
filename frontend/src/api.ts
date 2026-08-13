@@ -121,6 +121,55 @@ export interface DashboardFilters {
   end_date?: string;
 }
 
+export interface Contact {
+  id: string;
+  phone_e164: string;
+  full_name: string | null;
+  branch_id: string | null;
+  branch_name: string | null;
+  opt_in_status: string;
+  source: string;
+  created_at: string;
+}
+
+export interface ContactsListResponse {
+  data: Contact[];
+  pagination: { page: number; page_size: number; total: number };
+}
+
+export interface ContactsListParams {
+  search?: string;
+  branch_id?: string;
+  segment?: string;
+  page?: number;
+  page_size?: number;
+}
+
+export interface UploadPreviewRow {
+  row: number;
+  phone_e164: string;
+  full_name?: string | null;
+  segment?: string | null;
+  branch?: string | null;
+}
+
+export interface UploadError {
+  row: number;
+  phone_raw?: string | null;
+  reason: string;
+}
+
+export interface UploadResponse {
+  upload_id: string | null;
+  total_rows: number;
+  valid: number;
+  invalid: number;
+  skipped_empty: number;
+  preview_rows: UploadPreviewRow[];
+  errors: UploadError[];
+  committed: boolean;
+}
+
 // ─── Endpoints ───────────────────────────────────────────────────────────────
 
 export const api = {
@@ -128,6 +177,52 @@ export const api = {
 
   branches: (token: string, tenantId: string) =>
     request<{ data: Branch[] }>("/branches", { token, tenantId }),
+
+  contacts: (
+    token: string,
+    tenantId: string,
+    params?: ContactsListParams,
+  ) =>
+    request<ContactsListResponse>(`/contacts${qs(params)}`, {
+      token,
+      tenantId,
+    }),
+
+  contactsCount: (token: string, tenantId: string) =>
+    request<{ count: number }>("/contacts/count", { token, tenantId }),
+
+  uploadContacts: async (
+    token: string,
+    tenantId: string,
+    opts: { file: File; branch_id: string; commit: boolean },
+  ): Promise<UploadResponse> => {
+    // FormData path — cannot go through the JSON request() helper.
+    const fd = new FormData();
+    fd.append("file", opts.file);
+    const url = `${API_URL}/contacts/upload${qs({
+      branch_id: opts.branch_id,
+      commit: opts.commit,
+    })}`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "X-Tenant-Id": tenantId,
+      },
+      body: fd,
+    });
+    if (!res.ok) {
+      let detail = res.statusText || "Upload failed";
+      try {
+        const body = await res.json();
+        detail = body.detail || detail;
+      } catch {
+        /* ignore */
+      }
+      throw new ApiError(res.status, detail);
+    }
+    return res.json();
+  },
 
   dashboardKpis: (token: string, tenantId: string, params?: DashboardFilters) =>
     request<DashboardKpis>(`/dashboard/kpis${qs(params)}`, { token, tenantId }),

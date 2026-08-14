@@ -46,8 +46,12 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 engine = create_async_engine(
-    str(settings.DATABASE_URL),  # Cast to string safely, read directly from env
+    
+    pool_size=settings.db_pool_size,
+    max_overflow=settings.db_max_overflow,
+    pool_timeout=settings.db_pool_timeout_seconds,
     pool_pre_ping=True,
+    echo=settings.db_echo_sql
 )
 
 AsyncSessionLocal: async_sessionmaker[AsyncSession] = async_sessionmaker(

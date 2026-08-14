@@ -69,10 +69,12 @@ def do_run_migrations(connection) -> None:
 async def run_async_migrations() -> None:
     # Build the engine directly from the URL — no ConfigParser in the way,
     # so `%` in the password doesn't get interpolated.
+    _db_url = migration_url.replace(
+        "postgresql+asyncpg://", "postgresql+psycopg://", 1
+    )
     connectable = create_async_engine(
-        migration_url,
+        _db_url,
         poolclass=pool.NullPool,
-       
     )
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)

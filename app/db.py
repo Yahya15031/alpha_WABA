@@ -50,13 +50,13 @@ _db_url = settings.database_url.replace(
 # ---------------------------------------------------------------------------
 
 engine = create_async_engine(
-    settings.database_url,
+    _db_url,
     pool_size=settings.db_pool_size,
     max_overflow=settings.db_max_overflow,
     pool_timeout=settings.db_pool_timeout_seconds,
     pool_pre_ping=True,
     echo=settings.db_echo_sql,
-    
+    # Note: using psycopg async driver. Removed asyncpg-only connect_args.
 )
 
 AsyncSessionLocal: async_sessionmaker[AsyncSession] = async_sessionmaker(

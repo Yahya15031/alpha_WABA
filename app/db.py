@@ -41,22 +41,13 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-_db_url = settings.database_url.replace(
-    "postgresql+asyncpg://", "postgresql+psycopg://", 1
-)
-
 # ---------------------------------------------------------------------------
 # Engine + session factory
 # ---------------------------------------------------------------------------
 
 engine = create_async_engine(
-    _db_url,
-    pool_size=settings.db_pool_size,
-    max_overflow=settings.db_max_overflow,
-    pool_timeout=settings.db_pool_timeout_seconds,
+    str(settings.DATABASE_URL),  # Cast to string safely, read directly from env
     pool_pre_ping=True,
-    echo=settings.db_echo_sql,
-    # Note: using psycopg async driver. Removed asyncpg-only connect_args.
 )
 
 AsyncSessionLocal: async_sessionmaker[AsyncSession] = async_sessionmaker(

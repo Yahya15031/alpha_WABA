@@ -72,12 +72,7 @@ async def run_async_migrations() -> None:
     connectable = create_async_engine(
         migration_url,
         poolclass=pool.NullPool,
-        connect_args={
-            # Supabase pooler enforces TLS. asyncpg needs this explicit for
-            # pooler hostnames — without it the handshake fails and asyncpg
-            # bundles the failure as `TargetServerAttributeNotMatched`.
-            "ssl": "require",
-        },
+       
     )
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)

@@ -89,15 +89,22 @@ async def apply_tenant_context(
     transaction commits or rolls back. Caller must have an active
     transaction (typical pattern: `async with session.begin(): ...`).
     """
-    if is_platform_admin:
-        await session.execute(
-            text("SELECT set_config('app.is_platform_admin', 'true', true)")
-        )
-    if tenant_id is not None:
-        await session.execute(
-            text("SELECT set_config('app.current_tenant_id', :tid, true)"),
-            {"tid": str(tenant_id)},
-        )
+    # Always set `app.is_platform_admin` explicitly so downstream
+    # `current_setting(... )::boolean` or checks have a stable value.
+    await session.execute(
+        text("SELECT set_config('app.is_platform_admin', :val, true)"),
+        {"val": "true" if is_platform_admin else "false"},
+    )
+
+    # Always set `app.current_tenant_id`. When no tenant is provided we set
+    # the nil UUID so `current_setting(... )::uuid` casts succeed predictably.
+    tid = str(tenant_id) if tenant_id is not None else str(uuid.UUID(int=0))
+    await session.execute(
+        text("SELECT set_config('app.current_tenant_id', :tid, true)"),
+        {"tid": tid},
+    )
+
+    # `app.current_user_id` is user-scoped; set it only when provided.
     if user_id is not None:
         await session.execute(
             text("SELECT set_config('app.current_user_id', :uid, true)"),

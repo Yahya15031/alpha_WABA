@@ -417,20 +417,15 @@ async def get_tenant_scoped_session(
     tenant_context: TenantContext = Depends(get_active_tenant_context),
     current_user: CurrentUser = Depends(get_current_user),
 ) -> AsyncGenerator[AsyncSession, None]:
-    """FastAPI dep: yields a session with `app.current_tenant_id` set.
+    """FastAPI dep: yields a session scoped to the active tenant.
 
-    Wire this into every tenant-facing route:
+    When a platform admin has picked a specific tenant via X-Tenant-Id, we
+    scope the session to that tenant — we do NOT set is_platform_admin.
+    Platform admins get bypass ONLY on platform-wide routes that use
+    `get_platform_admin_session` directly (e.g. /platform/tenants).
 
-        @router.get("/contacts")
-        async def list_contacts(
-            session: AsyncSession = Depends(get_tenant_scoped_session),
-        ):
-            result = await session.execute(select(Contact))
-            return result.scalars().all()
-
-    Under the hood: opens a session, begins a transaction, sets the tenant
-    session variable via SET LOCAL, and yields. RLS handles the rest — the
-    query above only returns contacts for the current tenant.
+    This keeps the tenant switcher meaningful: picking "Acme" in the UI
+    actually shows Acme's data, not everything.
     """
     async with AsyncSessionLocal() as session:
         async with session.begin():
@@ -438,7 +433,7 @@ async def get_tenant_scoped_session(
                 session,
                 tenant_id=tenant_context.tenant_id,
                 user_id=current_user.id,
-                is_platform_admin=current_user.is_platform_admin,
+                is_platform_admin=False,  # <-- was current_user.is_platform_admin
             )
             yield session
 

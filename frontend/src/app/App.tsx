@@ -730,18 +730,94 @@ function DashboardScreen() {
 
 // ─── Screen 2: Contacts (STILL MOCK — banner shows this) ─────────────────────
 
+// ─── Phone normalization helpers (mirrors backend) ──────────────────────────
+
+function normalizePhoneToE164(raw: string): { ok: true; e164: string } | { ok: false; reason: string } {
+  if (!raw) return { ok: false, reason: "empty" };
+  const trimmed = raw.trim();
+  if (!trimmed) return { ok: false, reason: "empty" };
+
+  // Strip everything except digits and leading +
+  const cleaned = trimmed.replace(/[^\d+]/g, "");
+  const digitsOnly = cleaned.replace(/\+/g, "");
+
+  if (!digitsOnly) return { ok: false, reason: "no_digits" };
+  if (digitsOnly.length < 8) return { ok: false, reason: "too_short" };
+  if (digitsOnly.length > 15) return { ok: false, reason: "too_long" };
+
+  return { ok: true, e164: `+${digitsOnly}` };
+}
+
+interface ParsedPhoneLine {
+  raw: string;
+  status: "valid" | "invalid" | "empty";
+  e164?: string;
+  reason?: string;
+}
+
+function parsePastedPhones(text: string): ParsedPhoneLine[] {
+  const lines = text.split(/[\r\n]+/);
+  const out: ParsedPhoneLine[] = [];
+  const seen = new Set<string>();
+  for (const line of lines) {
+    if (!line.trim()) {
+      out.push({ raw: line, status: "empty" });
+      continue;
+    }
+    const norm = normalizePhoneToE164(line);
+    if (!norm.ok) {
+      out.push({ raw: line, status: "invalid", reason: norm.reason });
+      continue;
+    }
+    if (seen.has(norm.e164)) {
+      out.push({ raw: line, status: "invalid", reason: "duplicate" });
+      continue;
+    }
+    seen.add(norm.e164);
+    out.push({ raw: line, status: "valid", e164: norm.e164 });
+  }
+  return out;
+}
+
+/**
+ * Turn parsed phones into a synthetic CSV File that the existing
+ * /contacts/upload endpoint accepts. Header row uses `phone` as the column
+ * name — matches the backend's alias-matching (accepts phone, phone_number,
+ * mobile, contact, etc.).
+ */
+function phonesToCsvFile(parsed: ParsedPhoneLine[]): File {
+  const rows = ["phone"];
+  for (const p of parsed) {
+    if (p.status === "valid" && p.e164) rows.push(p.e164);
+  }
+  const blob = new Blob([rows.join("\n")], { type: "text/csv" });
+  return new File([blob], "pasted-phones.csv", { type: "text/csv" });
+}
+
 function ContactsScreen() {
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [branchFilter, setBranchFilter] = useState<string>("");
   const [page, setPage] = useState(1);
+  const [uploadMode, setUploadMode] = useState<"file" | "paste">("file");
+  const [pastedText, setPastedText] = useState("");
   const [pendingPreview, setPendingPreview] = useState<{
     file: File;
     branchId: string;
     preview: UploadResponse;
+    source: "file" | "paste";
   } | null>(null);
   const [uploadResult, setUploadResult] = useState<UploadResponse | null>(null);
+  const [showUploadDialog, setShowUploadDialog] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Live parse of pasted text for the preview counter
+  const parsedPastes = useMemo(
+    () => (uploadMode === "paste" ? parsePastedPhones(pastedText) : []),
+    [uploadMode, pastedText],
+  );
+  const validPastedCount = parsedPastes.filter((p) => p.status === "valid").length;
+  const invalidPastedCount = parsedPastes.filter((p) => p.status === "invalid").length;
 
   const { branches } = useBranches();
   const { count: countData } = useContactsCount() as { count: number | null };
@@ -767,7 +843,6 @@ function ContactsScreen() {
   const handleFileChosen = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    // Reset so re-choosing the same file still triggers change.
     e.target.value = "";
     const branchId = branchFilter || branches[0]?.id;
     if (!branchId) {
@@ -776,7 +851,29 @@ function ContactsScreen() {
     }
     try {
       const preview = await upload(file, branchId, false);
-      setPendingPreview({ file, branchId, preview });
+      setPendingPreview({ file, branchId, preview, source: "file" });
+      setShowUploadDialog(false);
+    } catch (err) {
+      alert(`Upload failed: ${(err as Error).message}`);
+    }
+  };
+
+  const handlePasteSubmit = async () => {
+    const branchId = branchFilter || branches[0]?.id;
+    if (!branchId) {
+      alert("Please select a branch before uploading contacts.");
+      return;
+    }
+    if (validPastedCount === 0) {
+      alert("No valid phone numbers to import.");
+      return;
+    }
+    const file = phonesToCsvFile(parsedPastes);
+    try {
+      const preview = await upload(file, branchId, false);
+      setPendingPreview({ file, branchId, preview, source: "paste" });
+      setShowUploadDialog(false);
+      setPastedText("");
     } catch (err) {
       alert(`Upload failed: ${(err as Error).message}`);
     }
@@ -816,26 +913,17 @@ function ContactsScreen() {
           </p>
         </div>
         <div>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".csv,.txt"
-            onChange={handleFileChosen}
-            style={{ display: "none" }}
-          />
           <button
-            onClick={() => fileInputRef.current?.click()}
-            disabled={uploading || branches.length === 0}
+            onClick={() => setShowUploadDialog(true)}
+            disabled={branches.length === 0}
             className="px-4 py-2 rounded-md text-sm font-medium text-white flex items-center gap-2"
             style={{
-              background:
-                uploading || branches.length === 0 ? "#CBD5E1" : "#2563EB",
-              cursor:
-                uploading || branches.length === 0 ? "not-allowed" : "pointer",
+              background: branches.length === 0 ? "#CBD5E1" : "#2563EB",
+              cursor: branches.length === 0 ? "not-allowed" : "pointer",
             }}
           >
             <Upload size={16} />
-            {uploading ? "Uploading…" : "Import CSV"}
+            Import Contacts
           </button>
         </div>
       </div>
@@ -993,8 +1081,8 @@ function ContactsScreen() {
         </div>
       )}
 
-      {/* Preview dialog */}
-      {pendingPreview && (
+      {/* Upload mode chooser dialog */}
+      {showUploadDialog && (
         <div
           style={{
             position: "fixed",
@@ -1008,7 +1096,7 @@ function ContactsScreen() {
           }}
         >
           <div
-            className="rounded-lg max-w-2xl w-full max-h-[80vh] overflow-hidden flex flex-col"
+            className="rounded-lg max-w-2xl w-full max-h-[85vh] overflow-hidden flex flex-col"
             style={{ background: "#fff" }}
           >
             <div
@@ -1016,126 +1104,157 @@ function ContactsScreen() {
               style={{ borderBottom: "1px solid #E2E8F0" }}
             >
               <h2 className="font-semibold" style={{ color: "#0F172A" }}>
-                CSV Import Preview
+                Import Contacts
               </h2>
-              <button onClick={() => setPendingPreview(null)}>
+              <button
+                onClick={() => {
+                  setShowUploadDialog(false);
+                  setPastedText("");
+                }}
+              >
                 <X size={16} />
               </button>
             </div>
-            <div className="p-4 overflow-y-auto flex-1">
-              <div className="grid grid-cols-4 gap-3 mb-4 text-sm">
+
+            {/* Mode tabs */}
+            <div className="flex gap-1 px-4 pt-3" style={{ borderBottom: "1px solid #E2E8F0" }}>
+              <button
+                onClick={() => setUploadMode("file")}
+                className="px-3 py-2 text-sm font-medium"
+                style={{
+                  color: uploadMode === "file" ? "#2563EB" : "#64748B",
+                  borderBottom: uploadMode === "file" ? "2px solid #2563EB" : "2px solid transparent",
+                  marginBottom: -1,
+                }}
+              >
+                Upload CSV file
+              </button>
+              <button
+                onClick={() => setUploadMode("paste")}
+                className="px-3 py-2 text-sm font-medium"
+                style={{
+                  color: uploadMode === "paste" ? "#2563EB" : "#64748B",
+                  borderBottom: uploadMode === "paste" ? "2px solid #2563EB" : "2px solid transparent",
+                  marginBottom: -1,
+                }}
+              >
+                Paste phone numbers
+              </button>
+            </div>
+
+            <div className="p-4 flex-1 overflow-y-auto">
+              {uploadMode === "file" && (
                 <div>
-                  <div style={{ color: "#64748B" }}>Total rows</div>
-                  <div className="font-semibold" style={{ color: "#0F172A" }}>
-                    {pendingPreview.preview.total_rows}
-                  </div>
+                  <p className="text-sm mb-4" style={{ color: "#475569" }}>
+                    CSV with a <code>phone</code> column (also accepts <code>phone_number</code>, <code>mobile</code>, <code>contact</code>). Optional columns:{" "}
+                    <code>name</code>, <code>segment</code>.
+                  </p>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".csv,.txt"
+                    onChange={handleFileChosen}
+                    style={{ display: "none" }}
+                  />
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={uploading}
+                    className="w-full py-8 rounded-md text-sm font-medium flex flex-col items-center gap-2"
+                    style={{
+                      border: "2px dashed #CBD5E1",
+                      background: uploading ? "#F1F5F9" : "#F8FAFC",
+                      color: "#2563EB",
+                      cursor: uploading ? "wait" : "pointer",
+                    }}
+                  >
+                    <Upload size={24} />
+                    {uploading ? "Uploading…" : "Choose CSV file"}
+                  </button>
                 </div>
+              )}
+
+              {uploadMode === "paste" && (
                 <div>
-                  <div style={{ color: "#64748B" }}>Valid</div>
-                  <div className="font-semibold" style={{ color: "#16A34A" }}>
-                    {pendingPreview.preview.valid}
-                  </div>
+                  <p className="text-sm mb-3" style={{ color: "#475569" }}>
+                    Paste phone numbers, one per line. Any format works — we'll normalize to E.164.
+                  </p>
+                  <textarea
+                    value={pastedText}
+                    onChange={(e) => setPastedText(e.target.value)}
+                    placeholder={`+92 300 1234567\n03001234567\n(212) 555-0100\n...`}
+                    rows={10}
+                    className="w-full px-3 py-2 text-sm font-mono rounded-md outline-none"
+                    style={{
+                      border: "1px solid #E2E8F0",
+                      background: "#fff",
+                      color: "#0F172A",
+                      resize: "vertical",
+                    }}
+                  />
+                  {pastedText.trim() && (
+                    <div className="mt-3 flex gap-4 text-xs">
+                      <span style={{ color: "#16A34A" }}>
+                        <strong>{validPastedCount}</strong> valid
+                      </span>
+                      {invalidPastedCount > 0 && (
+                        <span style={{ color: "#DC2626" }}>
+                          <strong>{invalidPastedCount}</strong> invalid or duplicate
+                        </span>
+                      )}
+                    </div>
+                  )}
+                  {invalidPastedCount > 0 && (
+                    <details className="mt-2 text-xs">
+                      <summary style={{ cursor: "pointer", color: "#64748B" }}>
+                        Show rejected lines
+                      </summary>
+                      <div className="mt-2 max-h-32 overflow-y-auto">
+                        {parsedPastes
+                          .filter((p) => p.status === "invalid")
+                          .slice(0, 20)
+                          .map((p, i) => (
+                            <div key={i} className="flex gap-2 py-0.5">
+                              <span className="font-mono" style={{ color: "#334155" }}>
+                                {p.raw.trim() || "(empty)"}
+                              </span>
+                              <span style={{ color: "#DC2626" }}>— {p.reason}</span>
+                            </div>
+                          ))}
+                      </div>
+                    </details>
+                  )}
                 </div>
-                <div>
-                  <div style={{ color: "#64748B" }}>Invalid</div>
-                  <div className="font-semibold" style={{ color: "#DC2626" }}>
-                    {pendingPreview.preview.invalid}
-                  </div>
-                </div>
-                <div>
-                  <div style={{ color: "#64748B" }}>Empty skipped</div>
-                  <div className="font-semibold" style={{ color: "#64748B" }}>
-                    {pendingPreview.preview.skipped_empty}
-                  </div>
-                </div>
+              )}
+            </div>
+
+            {uploadMode === "paste" && (
+              <div
+                className="p-4 flex justify-end gap-2"
+                style={{ borderTop: "1px solid #E2E8F0" }}
+              >
+                <button
+                  onClick={() => {
+                    setShowUploadDialog(false);
+                    setPastedText("");
+                  }}
+                  className="px-4 py-2 rounded-md text-sm"
+                  style={{ border: "1px solid #E2E8F0", background: "#fff", color: "#0F172A" }}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handlePasteSubmit}
+                  disabled={uploading || validPastedCount === 0}
+                  className="px-4 py-2 rounded-md text-sm font-medium text-white"
+                  style={{
+                    background: uploading || validPastedCount === 0 ? "#CBD5E1" : "#2563EB",
+                    cursor: uploading || validPastedCount === 0 ? "not-allowed" : "pointer",
+                  }}
+                >
+                  {uploading ? "Preparing…" : `Preview ${validPastedCount} phones`}
+                </button>
               </div>
-
-              {pendingPreview.preview.preview_rows.length > 0 && (
-                <div className="mb-4">
-                  <div
-                    className="text-xs uppercase font-medium mb-2"
-                    style={{ color: "#64748B" }}
-                  >
-                    First {pendingPreview.preview.preview_rows.length} valid rows
-                  </div>
-                  <table className="w-full text-xs">
-                    <thead>
-                      <tr>
-                        <th className="text-left py-1" style={{ color: "#475569" }}>Row</th>
-                        <th className="text-left py-1" style={{ color: "#475569" }}>Phone</th>
-                        <th className="text-left py-1" style={{ color: "#475569" }}>Name</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {pendingPreview.preview.preview_rows.map((r) => (
-                        <tr key={r.row}>
-                          <td className="py-1" style={{ color: "#64748B" }}>{r.row}</td>
-                          <td className="py-1 font-mono" style={{ color: "#334155" }}>{r.phone_e164}</td>
-                          <td className="py-1" style={{ color: "#334155" }}>{r.full_name ?? "—"}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-
-              {pendingPreview.preview.errors.length > 0 && (
-                <div>
-                  <div
-                    className="text-xs uppercase font-medium mb-2"
-                    style={{ color: "#DC2626" }}
-                  >
-                    Rejected rows (first {Math.min(10, pendingPreview.preview.errors.length)})
-                  </div>
-                  <table className="w-full text-xs">
-                    <tbody>
-                      {pendingPreview.preview.errors.slice(0, 10).map((e, i) => (
-                        <tr key={i}>
-                          <td className="py-1" style={{ color: "#64748B" }}>Row {e.row}</td>
-                          <td className="py-1 font-mono" style={{ color: "#334155" }}>{e.phone_raw ?? "(empty)"}</td>
-                          <td className="py-1" style={{ color: "#DC2626" }}>{e.reason}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-            <div
-              className="p-4 flex justify-end gap-2"
-              style={{ borderTop: "1px solid #E2E8F0" }}
-            >
-              <button
-                onClick={() => setPendingPreview(null)}
-                className="px-4 py-2 rounded-md text-sm"
-                style={{
-                  border: "1px solid #E2E8F0",
-                  background: "#fff",
-                  color: "#0F172A",
-                }}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={confirmCommit}
-                disabled={uploading || pendingPreview.preview.valid === 0}
-                className="px-4 py-2 rounded-md text-sm font-medium text-white"
-                style={{
-                  background:
-                    uploading || pendingPreview.preview.valid === 0
-                      ? "#CBD5E1"
-                      : "#2563EB",
-                  cursor:
-                    uploading || pendingPreview.preview.valid === 0
-                      ? "not-allowed"
-                      : "pointer",
-                }}
-              >
-                {uploading
-                  ? "Importing…"
-                  : `Import ${pendingPreview.preview.valid} contacts`}
-              </button>
-            </div>
+            )}
           </div>
         </div>
       )}

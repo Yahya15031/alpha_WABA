@@ -791,8 +791,7 @@ interface ParsedPhoneLine {
 }
 
 function parsePastedPhones(text: string, defaultCountryCode: string = "92"): ParsedPhoneLine[] {
-  const lines = text.split(/[
-]+/);
+  const lines = text.split(/[\r\n]+/);
   const out: ParsedPhoneLine[] = [];
   const seen = new Set<string>();
   for (const line of lines) {

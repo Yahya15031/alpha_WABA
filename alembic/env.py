@@ -15,6 +15,10 @@ port 5432, not the direct db.<project>.supabase.co URL which is IPv6-only).
 from __future__ import annotations
 
 import asyncio
+import sys
+
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 import os
 from logging.config import fileConfig
 

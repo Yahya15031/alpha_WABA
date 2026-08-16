@@ -732,20 +732,55 @@ function DashboardScreen() {
 
 // ─── Phone normalization helpers (mirrors backend) ──────────────────────────
 
-function normalizePhoneToE164(raw: string): { ok: true; e164: string } | { ok: false; reason: string } {
+/**
+ * Normalize a raw phone string to E.164.
+ *
+ * Handles common local-format inputs by prepending a default country code
+ * when appropriate. Rules:
+ *   - Strip everything except digits and a single leading '+'
+ *   - If input starts with '+', preserve as-is (assume user gave country code)
+ *   - If input starts with '00', treat as international prefix → replace with '+'
+ *   - Otherwise, strip a single leading '0' (local trunk prefix) and prepend
+ *     the default country code
+ *   - Reject if final digit count is <8 (too short to be a real phone) or
+ *     >15 (E.164 max length)
+ *
+ * @param raw the user's input line
+ * @param defaultCountryCode digits only, no '+'. e.g. "92" for Pakistan
+ */
+function normalizePhoneToE164(
+  raw: string,
+  defaultCountryCode: string = "92",
+): { ok: true; e164: string } | { ok: false; reason: string } {
   if (!raw) return { ok: false, reason: "empty" };
   const trimmed = raw.trim();
   if (!trimmed) return { ok: false, reason: "empty" };
 
-  // Strip everything except digits and leading +
+  // Strip everything except digits and leading '+'
   const cleaned = trimmed.replace(/[^\d+]/g, "");
-  const digitsOnly = cleaned.replace(/\+/g, "");
+  if (!cleaned) return { ok: false, reason: "no_digits" };
 
-  if (!digitsOnly) return { ok: false, reason: "no_digits" };
-  if (digitsOnly.length < 8) return { ok: false, reason: "too_short" };
-  if (digitsOnly.length > 15) return { ok: false, reason: "too_long" };
+  let digits: string;
 
-  return { ok: true, e164: `+${digitsOnly}` };
+  if (cleaned.startsWith("+")) {
+    // User provided country code — trust them
+    digits = cleaned.slice(1).replace(/\+/g, "");
+  } else if (cleaned.startsWith("00")) {
+    // International prefix (some regions dial 00 instead of +)
+    digits = cleaned.slice(2);
+  } else if (cleaned.startsWith("0")) {
+    // Local format with trunk-line leading 0 — strip and prepend CC
+    digits = defaultCountryCode + cleaned.slice(1);
+  } else {
+    // No prefix — assume already includes country code
+    digits = cleaned;
+  }
+
+  if (!digits) return { ok: false, reason: "no_digits" };
+  if (digits.length < 8) return { ok: false, reason: "too_short" };
+  if (digits.length > 15) return { ok: false, reason: "too_long" };
+
+  return { ok: true, e164: `+${digits}` };
 }
 
 interface ParsedPhoneLine {
@@ -755,8 +790,9 @@ interface ParsedPhoneLine {
   reason?: string;
 }
 
-function parsePastedPhones(text: string): ParsedPhoneLine[] {
-  const lines = text.split(/[\r\n]+/);
+function parsePastedPhones(text: string, defaultCountryCode: string = "92"): ParsedPhoneLine[] {
+  const lines = text.split(/[
+]+/);
   const out: ParsedPhoneLine[] = [];
   const seen = new Set<string>();
   for (const line of lines) {
@@ -764,7 +800,7 @@ function parsePastedPhones(text: string): ParsedPhoneLine[] {
       out.push({ raw: line, status: "empty" });
       continue;
     }
-    const norm = normalizePhoneToE164(line);
+    const norm = normalizePhoneToE164(line, defaultCountryCode);
     if (!norm.ok) {
       out.push({ raw: line, status: "invalid", reason: norm.reason });
       continue;
@@ -973,18 +1009,25 @@ function ContactsScreen() {
         <div
           className="mb-4 p-3 rounded-md text-sm flex items-start justify-between"
           style={{
-            background: "#F0FDF4",
-            border: "1px solid #BBF7D0",
-            color: "#166534",
+            background: uploadResult.valid > 0 ? "#F0FDF4" : "#FEFCE8",
+            border: `1px solid ${uploadResult.valid > 0 ? "#BBF7D0" : "#FEF08A"}`,
+            color: uploadResult.valid > 0 ? "#166534" : "#854D0E",
           }}
         >
           <span>
-            Imported <strong>{uploadResult.valid}</strong> contacts
-            {uploadResult.invalid > 0 &&
-              `, ${uploadResult.invalid} rejected`}
+            {uploadResult.valid > 0 && (
+              <>
+                Imported <strong>{uploadResult.valid}</strong> new contact{uploadResult.valid !== 1 && "s"}.
+              </>
+            )}
+            {uploadResult.invalid > 0 && (
+              <>
+                {" "}
+                {uploadResult.invalid} {uploadResult.valid > 0 ? "skipped" : "not imported"} (already exist or invalid format).
+              </>
+            )}
             {uploadResult.skipped_empty > 0 &&
-              `, ${uploadResult.skipped_empty} empty rows skipped`}
-            .
+              ` ${uploadResult.skipped_empty} empty rows skipped.`}
           </span>
           <button onClick={() => setUploadResult(null)}>
             <X size={16} />

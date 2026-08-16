@@ -146,8 +146,9 @@ export function useContacts(params: ContactsListParams): {
   const [error, setError] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
 
-  // Stable stringification so an inline `{}` doesn't refetch every render.
-  const key = useMemo(() => JSON.stringify(params ?? {}), [params]);
+  // Depend on the JSON string itself, not the object reference — this way
+  // even if a caller passes an inline object, we only refetch on real changes.
+  const key = JSON.stringify(params ?? {});
 
   useEffect(() => {
     if (!session || !activeTenantId) return;

@@ -821,12 +821,20 @@ function ContactsScreen() {
 
   const { branches } = useBranches();
   const { count: countData } = useContactsCount() as { count: number | null };
-  const { data, loading, error, refresh } = useContacts({
-    search: debouncedSearch || undefined,
-    branch_id: branchFilter || undefined,
-    page,
-    page_size: 25,
-  });
+
+  const selectedBranch = branchFilter || undefined;
+  const pageSize = 25;
+  const contactsParams = useMemo(
+    () => ({
+      search: debouncedSearch || undefined,
+      branchId: selectedBranch,
+      page,
+      pageSize,
+    }),
+    [debouncedSearch, selectedBranch, page, pageSize],
+  );
+
+  const { data, loading, error, refresh } = useContacts(contactsParams);
   const { upload, uploading } = useUploadContacts();
 
   // Debounce search (300ms) so we don't fire a request every keystroke.

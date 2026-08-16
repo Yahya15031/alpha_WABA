@@ -1266,6 +1266,173 @@ function ContactsScreen() {
           </div>
         </div>
       )}
+
+      {/* Preview dialog — shown after upload preview succeeds, before commit */}
+      {pendingPreview && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(15,23,42,0.5)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 24,
+            zIndex: 100,
+          }}
+        >
+          <div
+            className="rounded-lg max-w-2xl w-full max-h-[85vh] overflow-hidden flex flex-col"
+            style={{ background: "#fff" }}
+          >
+            <div
+              className="p-4 flex items-center justify-between"
+              style={{ borderBottom: "1px solid #E2E8F0" }}
+            >
+              <h2 className="font-semibold" style={{ color: "#0F172A" }}>
+                CSV Import Preview
+              </h2>
+              <button onClick={() => setPendingPreview(null)}>
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="p-4 overflow-y-auto flex-1">
+              <div className="grid grid-cols-4 gap-3 mb-4 text-sm">
+                <div>
+                  <div style={{ color: "#64748B" }}>Total rows</div>
+                  <div className="font-semibold" style={{ color: "#0F172A" }}>
+                    {pendingPreview.preview.total_rows}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ color: "#64748B" }}>Valid</div>
+                  <div className="font-semibold" style={{ color: "#16A34A" }}>
+                    {pendingPreview.preview.valid}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ color: "#64748B" }}>Invalid</div>
+                  <div className="font-semibold" style={{ color: "#DC2626" }}>
+                    {pendingPreview.preview.invalid}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ color: "#64748B" }}>Empty skipped</div>
+                  <div className="font-semibold" style={{ color: "#64748B" }}>
+                    {pendingPreview.preview.skipped_empty}
+                  </div>
+                </div>
+              </div>
+
+              {pendingPreview.preview.preview_rows.length > 0 && (
+                <div className="mb-4">
+                  <div
+                    className="text-xs uppercase font-medium mb-2"
+                    style={{ color: "#64748B" }}
+                  >
+                    First {pendingPreview.preview.preview_rows.length} valid rows
+                  </div>
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr>
+                        <th className="text-left py-1" style={{ color: "#475569" }}>
+                          Row
+                        </th>
+                        <th className="text-left py-1" style={{ color: "#475569" }}>
+                          Phone
+                        </th>
+                        <th className="text-left py-1" style={{ color: "#475569" }}>
+                          Name
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {pendingPreview.preview.preview_rows.map((r) => (
+                        <tr key={r.row}>
+                          <td className="py-1" style={{ color: "#64748B" }}>
+                            {r.row}
+                          </td>
+                          <td className="py-1 font-mono" style={{ color: "#334155" }}>
+                            {r.phone_e164}
+                          </td>
+                          <td className="py-1" style={{ color: "#334155" }}>
+                            {r.full_name ?? "—"}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {pendingPreview.preview.errors.length > 0 && (
+                <div>
+                  <div
+                    className="text-xs uppercase font-medium mb-2"
+                    style={{ color: "#DC2626" }}
+                  >
+                    Rejected rows (first {Math.min(10, pendingPreview.preview.errors.length)})
+                  </div>
+                  <table className="w-full text-xs">
+                    <tbody>
+                      {pendingPreview.preview.errors.slice(0, 10).map((e, i) => (
+                        <tr key={i}>
+                          <td className="py-1" style={{ color: "#64748B" }}>
+                            Row {e.row}
+                          </td>
+                          <td className="py-1 font-mono" style={{ color: "#334155" }}>
+                            {e.phone_raw ?? "(empty)"}
+                          </td>
+                          <td className="py-1" style={{ color: "#DC2626" }}>
+                            {e.reason}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            <div
+              className="p-4 flex justify-end gap-2"
+              style={{ borderTop: "1px solid #E2E8F0" }}
+            >
+              <button
+                onClick={() => setPendingPreview(null)}
+                className="px-4 py-2 rounded-md text-sm"
+                style={{
+                  border: "1px solid #E2E8F0",
+                  background: "#fff",
+                  color: "#0F172A",
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmCommit}
+                disabled={uploading || pendingPreview.preview.valid === 0}
+                className="px-4 py-2 rounded-md text-sm font-medium text-white"
+                style={{
+                  background:
+                    uploading || pendingPreview.preview.valid === 0
+                      ? "#CBD5E1"
+                      : "#2563EB",
+                  cursor:
+                    uploading || pendingPreview.preview.valid === 0
+                      ? "not-allowed"
+                      : "pointer",
+                }}
+              >
+                {uploading
+                  ? "Importing…"
+                  : `Import ${pendingPreview.preview.valid} contacts`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -394,6 +394,16 @@ export const api = {
       token,
       tenantId,
     }),
+
+  cancelBroadcast: (token: string, tenantId: string, broadcastId: string) =>
+    request<{ status: string; campaign_id: string }>(
+      `/broadcasts/${broadcastId}/cancel`,
+      {
+        method: "POST",
+        token,
+        tenantId,
+      }
+    ),
 };
 
 export { API_URL };

@@ -450,3 +450,32 @@ export function useSendBroadcast(): {
 
   return { send, sending, error };
 }
+
+
+export function useCancelBroadcast(): {
+  cancel: (broadcastId: string) => Promise<{ status: string; campaign_id: string }>;
+  canceling: boolean;
+  error: string | null;
+} {
+  const { session, activeTenantId } = useAuth();
+  const [canceling, setCanceling] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const cancel = async (broadcastId: string) => {
+    if (!session || !activeTenantId)
+      throw new Error("Not authenticated or no tenant selected");
+    setCanceling(true);
+    setError(null);
+    try {
+      return await api.cancelBroadcast(session.access_token, activeTenantId, broadcastId);
+    } catch (e) {
+      const msg = (e as Error).message ?? String(e);
+      setError(msg);
+      throw e;
+    } finally {
+      setCanceling(false);
+    }
+  };
+
+  return { cancel, canceling, error };
+}

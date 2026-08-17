@@ -83,7 +83,22 @@ async def send_message_task(
             )
             return {"success": False, "reason": "recipient_not_found"}
 
-        # Skip if terminal state already reached
+        # Guard: if the recipient was canceled/updated out from under us
+        # between enqueue and execution, skip the send. This prevents a
+        # race where a user cancels a campaign while a job is in flight.
+        if recipient.status != RecipientStatus.pending:
+            logger.info(
+                "Skipping send for %s — status is %s, not pending",
+                recipient_uuid,
+                recipient.status.value,
+            )
+            return {
+                "success": False,
+                "reason": "skipped_not_pending",
+                "status": recipient.status.value,
+            }
+
+        # Skip if terminal state already reached (defensive; covered above)
         if recipient.status in (
             RecipientStatus.sent,
             RecipientStatus.delivered,

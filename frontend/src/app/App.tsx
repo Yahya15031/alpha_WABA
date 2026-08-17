@@ -22,6 +22,7 @@ import {
   useDashboard,
   usePhoneNumbers,
   useSendBroadcast,
+  useCancelBroadcast,
   useTemplates,
   useUploadContacts,
 } from "./hooks";
@@ -1671,6 +1672,7 @@ function BroadcastsScreen() {
   const [view, setView] = useState<"list" | "create">("list");
   const { data, loading, error, refresh } = useBroadcasts({ page: 1, page_size: 50 });
   const { send, sending } = useSendBroadcast();
+  const { cancel, canceling } = useCancelBroadcast();
 
   const handleSend = async (broadcastId: string) => {
     if (!confirm("Send this broadcast now? This cannot be undone.")) return;
@@ -1680,6 +1682,16 @@ function BroadcastsScreen() {
       alert("Broadcast queued for sending.");
     } catch (err) {
       alert(`Failed to send: ${(err as Error).message}`);
+    }
+  };
+
+  const handleCancel = async (broadcastId: string) => {
+    if (!confirm("Cancel this broadcast? Messages already sent cannot be recalled — this only stops further sending.")) return;
+    try {
+      await cancel(broadcastId);
+      refresh();
+    } catch (err) {
+      alert(`Failed to cancel: ${(err as Error).message}`);
     }
   };
 
@@ -1766,6 +1778,16 @@ function BroadcastsScreen() {
                         style={{ background: sending ? "#CBD5E1" : "#2563EB" }}
                       >
                         {sending ? "Sending…" : "Send Now"}
+                      </button>
+                    )}
+                    {(b.status === "queued" || b.status === "sending") && (
+                      <button
+                        onClick={() => handleCancel(b.id)}
+                        disabled={canceling}
+                        className="text-xs px-3 py-1 rounded-md font-medium ml-2"
+                        style={{ background: canceling ? "#CBD5E1" : "#FEE2E2", color: "#991B1B" }}
+                      >
+                        {canceling ? "Canceling…" : "Cancel"}
                       </button>
                     )}
                   </td>

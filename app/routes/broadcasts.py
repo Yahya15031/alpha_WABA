@@ -33,7 +33,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import (
@@ -52,6 +52,8 @@ from app.models import (
     CampaignStatus,
     PhoneNumber,
     Template,
+    CampaignRecipient,
+    RecipientStatus,
 )
 
 router = APIRouter(prefix="/broadcasts", tags=["broadcasts"])
@@ -165,6 +167,11 @@ class BroadcastUpdateRequest(BaseModel):
 
 
 class SendResponse(BaseModel):
+    status: str
+    campaign_id: str
+
+
+class CancelResponse(BaseModel):
     status: str
     campaign_id: str
 
@@ -566,3 +573,56 @@ async def send_broadcast(
     await enqueue_materialize(campaign_id=campaign.id, tenant_id=ctx.tenant_id)
 
     return SendResponse(status="queued", campaign_id=str(campaign.id))
+
+
+
+@router.post("/{broadcast_id}/cancel", response_model=CancelResponse)
+async def cancel_broadcast(
+    broadcast_id: str,
+    ctx: TenantContext = Depends(get_active_tenant_context),
+    session: AsyncSession = Depends(get_tenant_scoped_session),
+) -> CancelResponse:
+    """Cancel a broadcast that hasn't finished sending.
+
+    Marks the campaign 'canceled' and flips any still-pending/queued
+    recipients to 'failed' with an explanatory message. Does NOT retract
+    messages already sent to Meta — WhatsApp has no unsend API for
+    business-initiated messages. This only stops *further* sends.
+
+    Safe to call on a campaign that's already fully sent/failed — it's a
+    no-op in that case (nothing left to cancel).
+    """
+    try:
+        campaign_uuid = uuid.UUID(broadcast_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="broadcast_id must be a UUID")
+
+    campaign = await session.get(Campaign, campaign_uuid)
+    if campaign is None:
+        raise HTTPException(status_code=404, detail="Broadcast not found")
+
+    if campaign.status in (CampaignStatus.sent, CampaignStatus.failed, CampaignStatus.canceled):
+        # Already terminal — nothing to do, but not an error either.
+        return CancelResponse(status=campaign.status.value, campaign_id=str(campaign.id))
+
+    campaign.status = CampaignStatus.canceled
+    await session.flush()
+
+    # Flip any not-yet-sent recipients so the worker (if it does pick up a
+    # stale job) sees them as already resolved and skips them.
+    await session.execute(
+        update(CampaignRecipient)
+        .where(
+            CampaignRecipient.campaign_id == campaign_uuid,
+            CampaignRecipient.status.in_(
+                [RecipientStatus.pending, RecipientStatus.queued]
+            ),
+        )
+        .values(
+            status=RecipientStatus.failed,
+            error_message="Canceled by user before send completed.",
+        )
+    )
+    await session.flush()
+
+    return CancelResponse(status="canceled", campaign_id=str(campaign.id))

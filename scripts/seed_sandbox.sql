@@ -35,7 +35,7 @@ INSERT INTO phone_numbers (
     'd206b6b3-cc46-4d67-a1f2-ecb5399c9fdd',
     'aaaaaaaa-a1ed-a1ed-a1ed-aaaaaaaaaaaa',
     '1220657667800081',                        -- Meta's phone number ID
-    '+1 555 136 3733',
+    '+92 3219032174',
     TRUE,
     'active'
 )
@@ -95,7 +95,7 @@ INSERT INTO contacts (
 ) VALUES (
     'd206b6b3-cc46-4d67-a1f2-ecb5399c9fdd',
     '2031d9f1-7749-411f-86f8-c85074cbbed5',
-    '+923219032174',                           -- REPLACE with real test number
+    '+923302488308',                           -- REPLACE with real test number
     'Test Recipient (Alpha)',
     'opted_in',
     'manual'

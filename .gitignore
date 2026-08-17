@@ -9,3 +9,4 @@ frontend/.env
 .pytest_cache/
 frontend/node_modules
 repomix-output.xml
+scripts/seed_sandbox.sql

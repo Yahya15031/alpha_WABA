@@ -46,12 +46,20 @@ class TransactionalWorkerSettings:
     """
 
     queue_name = "q:transactional"
-    functions = _FUNCTIONS
+    functions = [
+        send_message_task,
+        process_webhook_event_task,
+        materialize_campaign_task,
+    ]
+    redis_settings = RedisSettings.from_dsn(settings.redis_url)
+    # Reduce heartbeat frequency to 5 minutes (was ~30s default)
+    health_check_interval = 300
+    # When queue is empty, poll every 2 seconds (was ~0.5s default)
+    poll_delay = 2.0
     max_jobs = 10
     job_timeout = 30  # seconds
     keep_result = 3600  # keep result rows for 1 hour for debugging
     max_tries = 5
-    redis_settings = _redis_settings()
 
 
 class BulkWorkerSettings:
@@ -62,9 +70,15 @@ class BulkWorkerSettings:
     """
 
     queue_name = "q:bulk"
-    functions = _FUNCTIONS
-    max_jobs = 100
+    functions = [
+        send_message_task,
+        process_webhook_event_task,
+        materialize_campaign_task,
+    ]
+    redis_settings = RedisSettings.from_dsn(settings.redis_url)
+    health_check_interval = 300
+    poll_delay = 2.0
+    max_jobs = 10
     job_timeout = 30
     keep_result = 3600
     max_tries = 5
-    redis_settings = _redis_settings()

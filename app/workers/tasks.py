@@ -590,7 +590,7 @@ async def materialize_campaign_task(
         for contact in contacts:
             resolved: dict[str, str] = {}
             for var_def in template_variables:
-                idx = str(var_def.get("index"))
+                idx = str(var_def.get("name") or var_def.get("index") or "")
                 if not idx:
                     continue
                 path = variable_mappings.get(idx, "")

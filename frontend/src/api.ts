@@ -212,9 +212,8 @@ export interface PhoneNumbersListResponse {
 // ─── Broadcasts (aligned with backend broadcasts.py) ────────────────────────
 
 export type BroadcastStatus =
-  | "draft" | "scheduled" | "queued" | "sending"
-  | "sent" | "partial" | "failed" | "canceled";
-
+  | "draft" | "scheduled" | "queued" | "running"
+  | "completed" | "failed" | "canceled";
 export interface BroadcastListRow {
   id: string;
   name: string;

@@ -1752,13 +1752,13 @@ function BroadcastsScreen() {
                       className="px-2 py-0.5 text-xs rounded-full font-medium"
                       style={{
                         background:
-                          b.status === "sent" ? "#DCFCE7" :
-                          b.status === "sending" || b.status === "queued" ? "#FEF3C7" :
+                          b.status === "completed" ? "#DCFCE7" :
+                          b.status === "running" || b.status === "queued" ? "#FEF3C7" :
                           b.status === "failed" ? "#FEE2E2" :
                           b.status === "draft" ? "#E0E7FF" : "#F1F5F9",
                         color:
-                          b.status === "sent" ? "#166534" :
-                          b.status === "sending" || b.status === "queued" ? "#92400E" :
+                          b.status === "completed" ? "#166534" :
+                          b.status === "running" || b.status === "queued" ? "#92400E" :
                           b.status === "failed" ? "#991B1B" :
                           b.status === "draft" ? "#3730A3" : "#475569",
                       }}
@@ -1780,7 +1780,7 @@ function BroadcastsScreen() {
                         {sending ? "Sending…" : "Send Now"}
                       </button>
                     )}
-                    {(b.status === "queued" || b.status === "sending") && (
+                    {(b.status === "queued" || b.status === "running") && (
                       <button
                         onClick={() => handleCancel(b.id)}
                         disabled={canceling}

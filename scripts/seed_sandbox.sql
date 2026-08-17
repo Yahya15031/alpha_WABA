@@ -29,8 +29,8 @@ INSERT INTO phone_numbers (
 ) VALUES (
     'dddddddd-dddd-dddd-dddd-dddddddddddd',
     '11111111-1111-1111-1111-111111111111',   -- Acme Corp
-    'cccccccc-cccc-cccc-cccc-cccccccccccc',   -- our WABA id
-    '1201942996336021',                        -- Meta's phone number ID
+    '1049671297638323',   -- our WABA id
+    '1220657667800081',                        -- Meta's phone number ID
     '+1 555 136 3733',
     TRUE,
     'active'
@@ -48,7 +48,7 @@ INSERT INTO templates (
 ) VALUES (
     'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee',
     '11111111-1111-1111-1111-111111111111',   -- Acme Corp
-    'cccccccc-cccc-cccc-cccc-cccccccccccc',   -- our WABA id
+    '1049671297638323',   -- our WABA id
     'alpha_test_broadcast_v1',
     'en_US',
     'utility',

@@ -170,6 +170,90 @@ export interface UploadResponse {
   committed: boolean;
 }
 
+// ─── Templates ──────────────────────────────────────────────────────────────
+
+export interface TemplateVariableDef {
+  index: number;
+  description?: string;
+  example?: string;
+}
+
+export interface TemplateRow {
+  id: string;
+  waba_id: string;
+  name: string;
+  language_code: string;
+  category: string;
+  status: string;
+  body_text: string;
+  variable_definitions: TemplateVariableDef[];
+}
+
+export interface TemplatesListResponse {
+  data: TemplateRow[];
+}
+
+// ─── Phone numbers ─────────────────────────────────────────────────────────
+
+export interface PhoneNumberRow {
+  id: string;
+  display_phone_number: string;
+  meta_phone_number_id: string;
+  is_test_number: boolean;
+  status: string;
+  waba_id: string;
+  waba_business_name: string;
+}
+
+export interface PhoneNumbersListResponse {
+  data: PhoneNumberRow[];
+}
+
+// ─── Broadcasts ─────────────────────────────────────────────────────────────
+
+export type BroadcastStatus =
+  | "draft"
+  | "queued"
+  | "sending"
+  | "sent"
+  | "partial"
+  | "failed"
+  | "canceled";
+
+export interface BroadcastRow {
+  id: string;
+  name: string;
+  template_id: string;
+  template_name: string;
+  phone_number_id: string;
+  status: BroadcastStatus;
+  audience_type: "all" | "branch" | "segment";
+  audience_branch_id: string | null;
+  audience_size: number;
+  sent_count: number;
+  delivered_count: number;
+  failed_count: number;
+  created_at: string;
+  queued_at: string | null;
+  completed_at: string | null;
+}
+
+export interface BroadcastsListResponse {
+  data: BroadcastRow[];
+  pagination: { page: number; page_size: number; total: number };
+}
+
+export interface BroadcastCreatePayload {
+  name: string;
+  template_id: string;
+  phone_number_id: string;
+  audience_type: "all" | "branch";
+  audience_branch_id?: string | null;
+  // Map of variable index → static value (Phase 1: all contacts get the same value
+  // for each variable; per-contact personalization comes later)
+  variable_bindings: Record<string, string>;
+}
+
 // ─── Endpoints ───────────────────────────────────────────────────────────────
 
 export const api = {
@@ -256,6 +340,48 @@ export const api = {
       `/dashboard/latest-broadcasts${qs(params)}`,
       { token, tenantId },
     ),
+
+  templates: (token: string, tenantId: string) =>
+    request<TemplatesListResponse>("/templates", { token, tenantId }),
+
+  phoneNumbers: (token: string, tenantId: string) =>
+    request<PhoneNumbersListResponse>("/phone-numbers", { token, tenantId }),
+
+  broadcasts: (
+    token: string,
+    tenantId: string,
+    params?: { page?: number; page_size?: number; status?: string },
+  ) =>
+    request<BroadcastsListResponse>(`/broadcasts${qs(params)}`, {
+      token,
+      tenantId,
+    }),
+
+  createBroadcast: (
+    token: string,
+    tenantId: string,
+    payload: BroadcastCreatePayload,
+  ) =>
+    request<BroadcastRow>("/broadcasts", {
+      method: "POST",
+      token,
+      tenantId,
+      body: payload,
+    }),
+
+  queueBroadcast: (token: string, tenantId: string, broadcastId: string) =>
+    request<BroadcastRow>(`/broadcasts/${broadcastId}/queue`, {
+      method: "POST",
+      token,
+      tenantId,
+    }),
+
+  cancelBroadcast: (token: string, tenantId: string, broadcastId: string) =>
+    request<BroadcastRow>(`/broadcasts/${broadcastId}/cancel`, {
+      method: "POST",
+      token,
+      tenantId,
+    }),
 };
 
 export { API_URL };

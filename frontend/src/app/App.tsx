@@ -15,10 +15,15 @@ import {
 import { FullPageLoader, LoginScreen, useAuth } from "../auth";
 import {
   useBranches,
+  useBroadcasts,
   useContacts,
   useContactsCount,
-  useUploadContacts,
+  useCreateBroadcast,
   useDashboard,
+  usePhoneNumbers,
+  useQueueBroadcast,
+  useTemplates,
+  useUploadContacts,
 } from "./hooks";
 import type { CampaignStatusCounts, LatestBroadcast } from "../api";
 import type { UploadResponse } from "../api";
@@ -1481,18 +1486,113 @@ function ContactsScreen() {
 
 // ─── Screen 3+4: Placeholders for Campaign & Logs (still mock, banner shows) ─
 
-function CampaignScreen() {
+function BroadcastsScreen() {
+  const [view, setView] = useState<"list" | "create">("list");
+  const { data, loading, error, refresh } = useBroadcasts({ page: 1, page_size: 50 });
+  const { queue, queueing } = useQueueBroadcast();
+
+  const handleQueue = async (broadcastId: string) => {
+    if (!confirm("Send this broadcast now? This cannot be undone.")) return;
+    try {
+      await queue(broadcastId);
+      refresh();
+      alert("Broadcast queued for sending.");
+    } catch (err) {
+      alert(`Failed to queue: ${(err as Error).message}`);
+    }
+  };
+
+  if (view === "create") {
+    return <BroadcastCreateForm onDone={() => { setView("list"); refresh(); }} onCancel={() => setView("list")} />;
+  }
+
+  const broadcasts = data?.data ?? [];
+
   return (
-    <>
-      <MockDataBanner label="Broadcast Campaigns" />
-      <div className="flex flex-col gap-4 p-4 sm:p-6 lg:p-8">
-        <h1 className="text-xl font-semibold" style={{ color: "#0F172A" }}>Create Broadcast</h1>
-        <p className="text-sm" style={{ color: "#64748B" }}>
-          Backend endpoints (POST /broadcasts, /broadcasts/:id/send) are live.
-          Wizard wiring is next up.
-        </p>
+    <div className="p-6 max-w-7xl mx-auto">
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-2xl font-semibold" style={{ color: "#0F172A" }}>Broadcast Campaigns</h1>
+          <p className="text-sm mt-1" style={{ color: "#64748B" }}>
+            {data ? `${data.pagination.total} total` : "Loading…"}
+          </p>
+        </div>
+        <button
+          onClick={() => setView("create")}
+          className="px-4 py-2 rounded-md text-sm font-medium text-white flex items-center gap-2"
+          style={{ background: "#2563EB", cursor: "pointer" }}
+        >
+          + Create Campaign
+        </button>
       </div>
-    </>
+
+      <div className="rounded-lg overflow-hidden" style={{ border: "1px solid #E2E8F0", background: "#fff" }}>
+        {error && <div className="p-4 text-sm" style={{ color: "#B91C1C" }}>Failed to load: {error}</div>}
+        {loading && !data && <div className="p-8 text-center text-sm" style={{ color: "#64748B" }}>Loading…</div>}
+        {!loading && broadcasts.length === 0 && !error && (
+          <div className="p-8 text-center text-sm" style={{ color: "#64748B" }}>
+            No campaigns yet. Click "Create Campaign" to get started.
+          </div>
+        )}
+        {broadcasts.length > 0 && (
+          <table className="w-full text-sm">
+            <thead style={{ background: "#F8FAFC" }}>
+              <tr>
+                <th className="text-left px-4 py-2 font-medium" style={{ color: "#475569" }}>Name</th>
+                <th className="text-left px-4 py-2 font-medium" style={{ color: "#475569" }}>Template</th>
+                <th className="text-left px-4 py-2 font-medium" style={{ color: "#475569" }}>Audience</th>
+                <th className="text-left px-4 py-2 font-medium" style={{ color: "#475569" }}>Status</th>
+                <th className="text-left px-4 py-2 font-medium" style={{ color: "#475569" }}>Sent</th>
+                <th className="text-left px-4 py-2 font-medium" style={{ color: "#475569" }}>Delivered</th>
+                <th className="text-left px-4 py-2 font-medium" style={{ color: "#475569" }}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {broadcasts.map((b) => (
+                <tr key={b.id} style={{ borderTop: "1px solid #F1F5F9" }}>
+                  <td className="px-4 py-2" style={{ color: "#0F172A" }}>{b.name}</td>
+                  <td className="px-4 py-2 font-mono text-xs" style={{ color: "#334155" }}>{b.template_name}</td>
+                  <td className="px-4 py-2" style={{ color: "#475569" }}>{b.audience_size}</td>
+                  <td className="px-4 py-2">
+                    <span
+                      className="px-2 py-0.5 text-xs rounded-full font-medium"
+                      style={{
+                        background:
+                          b.status === "sent" ? "#DCFCE7" :
+                          b.status === "sending" || b.status === "queued" ? "#FEF3C7" :
+                          b.status === "failed" ? "#FEE2E2" :
+                          b.status === "draft" ? "#E0E7FF" : "#F1F5F9",
+                        color:
+                          b.status === "sent" ? "#166534" :
+                          b.status === "sending" || b.status === "queued" ? "#92400E" :
+                          b.status === "failed" ? "#991B1B" :
+                          b.status === "draft" ? "#3730A3" : "#475569",
+                      }}
+                    >
+                      {b.status}
+                    </span>
+                  </td>
+                  <td className="px-4 py-2" style={{ color: "#475569" }}>{b.sent_count}</td>
+                  <td className="px-4 py-2" style={{ color: "#475569" }}>{b.delivered_count}</td>
+                  <td className="px-4 py-2">
+                    {b.status === "draft" && (
+                      <button
+                        onClick={() => handleQueue(b.id)}
+                        disabled={queueing}
+                        className="text-xs px-3 py-1 rounded-md text-white font-medium"
+                        style={{ background: queueing ? "#CBD5E1" : "#2563EB" }}
+                      >
+                        {queueing ? "Sending…" : "Send Now"}
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -1561,7 +1661,7 @@ export default function App() {
         >
           {screen === "dashboard" && <DashboardScreen />}
           {screen === "contacts"  && <ContactsScreen />}
-          {screen === "campaign"  && <CampaignScreen />}
+          {screen === "campaign"  && <BroadcastsScreen />}
           {screen === "logs"      && <LogsScreen />}
         </main>
       </div>

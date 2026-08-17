@@ -13,6 +13,13 @@ import {
   type ContactsListParams,
   type ContactsListResponse,
   type UploadResponse,
+  type TemplateRow,
+  type TemplatesListResponse,
+  type PhoneNumberRow,
+  type PhoneNumbersListResponse,
+  type BroadcastRow,
+  type BroadcastsListResponse,
+  type BroadcastCreatePayload,
 } from "../api";
 import { useAuth } from "../auth";
 
@@ -252,4 +259,194 @@ export function useUploadContacts(): {
   };
 
   return { upload, uploading, error };
+}
+
+// ─── useTemplates ────────────────────────────────────────────────────────────
+
+export function useTemplates(): {
+  templates: TemplateRow[];
+  loading: boolean;
+  error: string | null;
+} {
+  const { session, activeTenantId } = useAuth();
+  const [templates, setTemplates] = useState<TemplateRow[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!session || !activeTenantId) return;
+    let cancelled = false;
+    setLoading(true);
+    api
+      .templates(session.access_token, activeTenantId)
+      .then((res) => {
+        if (!cancelled) {
+          setTemplates(res.data);
+          setError(null);
+        }
+      })
+      .catch((e) => {
+        if (!cancelled) setError((e as Error).message ?? String(e));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.access_token, activeTenantId]);
+
+  return { templates, loading, error };
+}
+
+// ─── usePhoneNumbers ─────────────────────────────────────────────────────────
+
+export function usePhoneNumbers(): {
+  phoneNumbers: PhoneNumberRow[];
+  loading: boolean;
+  error: string | null;
+} {
+  const { session, activeTenantId } = useAuth();
+  const [phoneNumbers, setPhoneNumbers] = useState<PhoneNumberRow[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!session || !activeTenantId) return;
+    let cancelled = false;
+    setLoading(true);
+    api
+      .phoneNumbers(session.access_token, activeTenantId)
+      .then((res) => {
+        if (!cancelled) {
+          setPhoneNumbers(res.data);
+          setError(null);
+        }
+      })
+      .catch((e) => {
+        if (!cancelled) setError((e as Error).message ?? String(e));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.access_token, activeTenantId]);
+
+  return { phoneNumbers, loading, error };
+}
+
+// ─── useBroadcasts ───────────────────────────────────────────────────────────
+
+export function useBroadcasts(params?: {
+  page?: number;
+  page_size?: number;
+  status?: string;
+}): {
+  data: BroadcastsListResponse | null;
+  loading: boolean;
+  error: string | null;
+  refresh: () => void;
+} {
+  const { session, activeTenantId } = useAuth();
+  const [data, setData] = useState<BroadcastsListResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [tick, setTick] = useState(0);
+
+  const key = JSON.stringify(params ?? {});
+
+  useEffect(() => {
+    if (!session || !activeTenantId) return;
+    let cancelled = false;
+    setLoading(true);
+    api
+      .broadcasts(session.access_token, activeTenantId, JSON.parse(key))
+      .then((res) => {
+        if (!cancelled) {
+          setData(res);
+          setError(null);
+        }
+      })
+      .catch((e) => {
+        if (!cancelled) setError((e as Error).message ?? String(e));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.access_token, activeTenantId, key, tick]);
+
+  return { data, loading, error, refresh: () => setTick((t) => t + 1) };
+}
+
+// ─── useCreateBroadcast ──────────────────────────────────────────────────────
+
+export function useCreateBroadcast(): {
+  create: (payload: BroadcastCreatePayload) => Promise<BroadcastRow>;
+  creating: boolean;
+  error: string | null;
+} {
+  const { session, activeTenantId } = useAuth();
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const create = async (payload: BroadcastCreatePayload) => {
+    if (!session || !activeTenantId)
+      throw new Error("Not authenticated or no tenant selected");
+    setCreating(true);
+    setError(null);
+    try {
+      return await api.createBroadcast(
+        session.access_token,
+        activeTenantId,
+        payload,
+      );
+    } catch (e) {
+      const msg = (e as Error).message ?? String(e);
+      setError(msg);
+      throw e;
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  return { create, creating, error };
+}
+
+// ─── useQueueBroadcast ───────────────────────────────────────────────────────
+
+export function useQueueBroadcast(): {
+  queue: (broadcastId: string) => Promise<BroadcastRow>;
+  queueing: boolean;
+  error: string | null;
+} {
+  const { session, activeTenantId } = useAuth();
+  const [queueing, setQueueing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const queue = async (broadcastId: string) => {
+    if (!session || !activeTenantId)
+      throw new Error("Not authenticated or no tenant selected");
+    setQueueing(true);
+    setError(null);
+    try {
+      return await api.queueBroadcast(
+        session.access_token,
+        activeTenantId,
+        broadcastId,
+      );
+    } catch (e) {
+      const msg = (e as Error).message ?? String(e);
+      setError(msg);
+      throw e;
+    } finally {
+      setQueueing(false);
+    }
+  };
+
+  return { queue, queueing, error };
 }

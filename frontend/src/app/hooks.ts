@@ -17,9 +17,11 @@ import {
   type TemplatesListResponse,
   type PhoneNumberRow,
   type PhoneNumbersListResponse,
-  type BroadcastRow,
+  type BroadcastListRow,
   type BroadcastsListResponse,
   type BroadcastCreatePayload,
+  type BroadcastDetail,
+  type SendResponse,
 } from "../api";
 import { useAuth } from "../auth";
 
@@ -386,7 +388,7 @@ export function useBroadcasts(params?: {
 // ─── useCreateBroadcast ──────────────────────────────────────────────────────
 
 export function useCreateBroadcast(): {
-  create: (payload: BroadcastCreatePayload) => Promise<BroadcastRow>;
+  create: (payload: BroadcastCreatePayload) => Promise<BroadcastDetail>;
   creating: boolean;
   error: string | null;
 } {
@@ -417,36 +419,34 @@ export function useCreateBroadcast(): {
   return { create, creating, error };
 }
 
-// ─── useQueueBroadcast ───────────────────────────────────────────────────────
+// ─── useSendBroadcast ───────────────────────────────────────────────────────
 
-export function useQueueBroadcast(): {
-  queue: (broadcastId: string) => Promise<BroadcastRow>;
-  queueing: boolean;
+export function useSendBroadcast(): {
+  send: (broadcastId: string) => Promise<SendResponse>;
+  sending: boolean;
   error: string | null;
 } {
   const { session, activeTenantId } = useAuth();
-  const [queueing, setQueueing] = useState(false);
+  const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const queue = async (broadcastId: string) => {
+  const send = async (broadcastId: string) => {
     if (!session || !activeTenantId)
       throw new Error("Not authenticated or no tenant selected");
-    setQueueing(true);
+    setSending(true);
     setError(null);
     try {
-      return await api.queueBroadcast(
-        session.access_token,
-        activeTenantId,
-        broadcastId,
+      return await api.sendBroadcast(
+        session.access_token, activeTenantId, broadcastId,
       );
     } catch (e) {
       const msg = (e as Error).message ?? String(e);
       setError(msg);
       throw e;
     } finally {
-      setQueueing(false);
+      setSending(false);
     }
   };
 
-  return { queue, queueing, error };
+  return { send, sending, error };
 }

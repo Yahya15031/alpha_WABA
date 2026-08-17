@@ -209,49 +209,68 @@ export interface PhoneNumbersListResponse {
   data: PhoneNumberRow[];
 }
 
-// ─── Broadcasts ─────────────────────────────────────────────────────────────
+// ─── Broadcasts (aligned with backend broadcasts.py) ────────────────────────
 
 export type BroadcastStatus =
-  | "draft"
-  | "queued"
-  | "sending"
-  | "sent"
-  | "partial"
-  | "failed"
-  | "canceled";
+  | "draft" | "scheduled" | "queued" | "sending"
+  | "sent" | "partial" | "failed" | "canceled";
 
-export interface BroadcastRow {
+export interface BroadcastListRow {
   id: string;
   name: string;
-  template_id: string;
+  branch_name: string;
   template_name: string;
-  phone_number_id: string;
   status: BroadcastStatus;
-  audience_type: "all" | "branch" | "segment";
-  audience_branch_id: string | null;
-  audience_size: number;
-  sent_count: number;
-  delivered_count: number;
-  failed_count: number;
+  recipient_count: number;
+  scheduled_for: string | null;
   created_at: string;
-  queued_at: string | null;
-  completed_at: string | null;
 }
 
 export interface BroadcastsListResponse {
-  data: BroadcastRow[];
+  data: BroadcastListRow[];
   pagination: { page: number; page_size: number; total: number };
 }
 
 export interface BroadcastCreatePayload {
   name: string;
-  template_id: string;
+  branch_id: string;               // always required
   phone_number_id: string;
-  audience_type: "all" | "branch";
-  audience_branch_id?: string | null;
-  // Map of variable index → static value (Phase 1: all contacts get the same value
-  // for each variable; per-contact personalization comes later)
-  variable_bindings: Record<string, string>;
+  template_id: string;
+  variable_mappings: Record<string, string>;  // key is variable NAME, e.g. "one","two"
+  audience_type: "all_contacts" | "branch_group" | "csv_upload";
+  audience_config: Record<string, unknown>;   // {} for all_contacts and branch_group
+  lane?: "transactional" | "bulk";            // default bulk
+  schedule?: "immediate" | "scheduled";       // default immediate
+  scheduled_for?: string | null;
+}
+
+export interface BroadcastDetail {
+  id: string;
+  name: string;
+  status: BroadcastStatus;
+  branch: { id: string; name: string };
+  template: { id: string; name: string; language_code?: string };
+  phone: { id: string; display_phone_number: string };
+  audience_type: string;
+  audience_config: Record<string, unknown>;
+  variable_mappings: Record<string, string>;
+  scheduled_for: string | null;
+  created_at: string;
+  updated_at: string;
+  stats: {
+    total_recipients: number;
+    total_sent: number;
+    total_delivered: number;
+    total_read: number;
+    total_failed: number;
+    avg_latency_ms: number | null;
+    p95_latency_ms: number | null;
+  };
+}
+
+export interface SendResponse {
+  status: string;
+  campaign_id: string;
 }
 
 // ─── Endpoints ───────────────────────────────────────────────────────────────
@@ -362,22 +381,15 @@ export const api = {
     tenantId: string,
     payload: BroadcastCreatePayload,
   ) =>
-    request<BroadcastRow>("/broadcasts", {
+    request<BroadcastDetail>("/broadcasts", {
       method: "POST",
       token,
       tenantId,
       body: payload,
     }),
 
-  queueBroadcast: (token: string, tenantId: string, broadcastId: string) =>
-    request<BroadcastRow>(`/broadcasts/${broadcastId}/queue`, {
-      method: "POST",
-      token,
-      tenantId,
-    }),
-
-  cancelBroadcast: (token: string, tenantId: string, broadcastId: string) =>
-    request<BroadcastRow>(`/broadcasts/${broadcastId}/cancel`, {
+  sendBroadcast: (token: string, tenantId: string, broadcastId: string) =>
+    request<SendResponse>(`/broadcasts/${broadcastId}/send`, {
       method: "POST",
       token,
       tenantId,

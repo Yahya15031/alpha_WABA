@@ -21,12 +21,193 @@ import {
   useCreateBroadcast,
   useDashboard,
   usePhoneNumbers,
-  useQueueBroadcast,
+  useSendBroadcast,
   useTemplates,
   useUploadContacts,
 } from "./hooks";
 import type { CampaignStatusCounts, LatestBroadcast } from "../api";
 import type { UploadResponse } from "../api";
+function BroadcastCreateForm({ onDone, onCancel }: { onDone: () => void; onCancel: () => void }) {
+  const [name, setName] = useState("");
+  const [templateId, setTemplateId] = useState("");
+  const [phoneNumberId, setPhoneNumberId] = useState("");
+  const [branchId, setBranchId] = useState("");
+  const [audienceType, setAudienceType] = useState<"all_contacts" | "branch_group">("all_contacts");
+  const [variableMappings, setVariableMappings] = useState<Record<string, string>>({});
+
+  const { templates, loading: tplLoading } = useTemplates();
+  const { phoneNumbers, loading: phLoading } = usePhoneNumbers();
+  const { branches } = useBranches();
+  const { create, creating } = useCreateBroadcast();
+
+  const selectedTemplate = templates.find((t) => t.id === templateId);
+
+  useEffect(() => {
+    if (!selectedTemplate) { setVariableMappings({}); return; }
+    const initial: Record<string, string> = {};
+    for (const v of selectedTemplate.variable_definitions ?? []) {
+      const key = (v as any).name ?? String((v as any).index);
+      initial[key] = "";
+    }
+    setVariableMappings(initial);
+  }, [selectedTemplate?.id]);
+
+  const canSubmit =
+    name.trim() && templateId && phoneNumberId && branchId &&
+    Object.values(variableMappings).every((v) => v.trim().length > 0) &&
+    !creating;
+
+  const handleSubmit = async () => {
+    if (!canSubmit) return;
+    try {
+      const literalMappings: Record<string, string> = {};
+      for (const [k, v] of Object.entries(variableMappings)) {
+        literalMappings[k] = `$literal:${v}`;
+      }
+      await create({
+        name: name.trim(),
+        branch_id: branchId,
+        phone_number_id: phoneNumberId,
+        template_id: templateId,
+        variable_mappings: literalMappings,
+        audience_type: audienceType,
+        audience_config: {},
+        lane: "bulk",
+        schedule: "immediate",
+      });
+      onDone();
+    } catch (err) {
+      alert(`Failed to create campaign: ${(err as Error).message}`);
+    }
+  };
+
+  return (
+    <div className="p-6 max-w-2xl mx-auto">
+      <div className="mb-6">
+        <button onClick={onCancel} className="text-sm mb-2" style={{ color: "#2563EB" }}>← Back to campaigns</button>
+        <h1 className="text-2xl font-semibold" style={{ color: "#0F172A" }}>Create Broadcast Campaign</h1>
+      </div>
+
+      <div className="space-y-4 p-6 rounded-lg" style={{ background: "#fff", border: "1px solid #E2E8F0" }}>
+        <div>
+          <label className="text-sm font-medium block mb-1" style={{ color: "#334155" }}>Campaign name</label>
+          <input
+            value={name} onChange={(e) => setName(e.target.value)}
+            placeholder="e.g. Faculty Meeting Oct 25"
+            className="w-full px-3 py-2 text-sm rounded-md outline-none"
+            style={{ border: "1px solid #E2E8F0", background: "#fff" }}
+          />
+        </div>
+
+        <div>
+          <label className="text-sm font-medium block mb-1" style={{ color: "#334155" }}>Owning branch</label>
+          <select
+            value={branchId} onChange={(e) => setBranchId(e.target.value)}
+            className="w-full px-3 py-2 text-sm rounded-md outline-none"
+            style={{ border: "1px solid #E2E8F0", background: "#fff" }}
+          >
+            <option value="">Select a branch</option>
+            {branches.map((b) => (
+              <option key={b.id} value={b.id}>{b.name}</option>
+            ))}
+          </select>
+        </div>
+
+        <div>
+          <label className="text-sm font-medium block mb-1" style={{ color: "#334155" }}>Send from (phone number)</label>
+          <select
+            value={phoneNumberId} onChange={(e) => setPhoneNumberId(e.target.value)}
+            className="w-full px-3 py-2 text-sm rounded-md outline-none"
+            style={{ border: "1px solid #E2E8F0", background: "#fff" }}
+          >
+            <option value="">{phLoading ? "Loading…" : "Select a sender number"}</option>
+            {phoneNumbers.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.display_phone_number} — {p.waba_business_name}{p.is_test_number ? " (test)" : ""}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div>
+          <label className="text-sm font-medium block mb-1" style={{ color: "#334155" }}>Message template</label>
+          <select
+            value={templateId} onChange={(e) => setTemplateId(e.target.value)}
+            className="w-full px-3 py-2 text-sm rounded-md outline-none"
+            style={{ border: "1px solid #E2E8F0", background: "#fff" }}
+          >
+            <option value="">{tplLoading ? "Loading…" : "Select an approved template"}</option>
+            {templates.filter((t) => t.status === "approved").map((t) => (
+              <option key={t.id} value={t.id}>{t.name} ({t.language_code})</option>
+            ))}
+          </select>
+          {selectedTemplate && (
+            <div className="mt-2 p-3 rounded-md text-xs whitespace-pre-wrap" style={{ background: "#F8FAFC", color: "#475569" }}>
+              <div className="font-medium mb-1" style={{ color: "#0F172A" }}>Template body:</div>
+              {selectedTemplate.body_text}
+            </div>
+          )}
+        </div>
+
+        {selectedTemplate && (selectedTemplate.variable_definitions?.length ?? 0) > 0 && (
+          <div>
+            <label className="text-sm font-medium block mb-2" style={{ color: "#334155" }}>Template variables</label>
+            <div className="space-y-2">
+              {selectedTemplate.variable_definitions.map((v: any) => {
+                const key = v.name ?? String(v.index);
+                return (
+                  <div key={key} className="flex items-center gap-2">
+                    <span className="text-xs font-mono px-2 py-1 rounded" style={{ background: "#F1F5F9", color: "#475569" }}>
+                      {"{{"}{key}{"}}"}
+                    </span>
+                    <input
+                      value={variableMappings[key] ?? ""}
+                      onChange={(e) => setVariableMappings((prev) => ({ ...prev, [key]: e.target.value }))}
+                      placeholder={v.description || v.example || `Value for {{${key}}}`}
+                      className="flex-1 px-3 py-2 text-sm rounded-md outline-none"
+                      style={{ border: "1px solid #E2E8F0", background: "#fff" }}
+                    />
+                  </div>
+                );
+              })}
+            </div>
+            <p className="text-xs mt-2" style={{ color: "#64748B" }}>
+              Phase 1: each variable gets the same literal value for every recipient.
+            </p>
+          </div>
+        )}
+
+        <div>
+          <label className="text-sm font-medium block mb-1" style={{ color: "#334155" }}>Audience</label>
+          <div className="flex gap-4">
+            <label className="flex items-center gap-2 text-sm" style={{ color: "#334155" }}>
+              <input type="radio" checked={audienceType === "all_contacts"} onChange={() => setAudienceType("all_contacts" as any)} />
+              All contacts in this tenant
+            </label>
+            <label className="flex items-center gap-2 text-sm" style={{ color: "#334155" }}>
+              <input type="radio" checked={audienceType === "branch_group"} onChange={() => setAudienceType("branch_group" as any)} />
+              Only the owning branch
+            </label>
+          </div>
+        </div>
+
+        <div className="flex justify-end gap-2 pt-4" style={{ borderTop: "1px solid #E2E8F0" }}>
+          <button onClick={onCancel} className="px-4 py-2 rounded-md text-sm" style={{ border: "1px solid #E2E8F0", background: "#fff", color: "#0F172A" }}>
+            Cancel
+          </button>
+          <button
+            onClick={handleSubmit} disabled={!canSubmit}
+            className="px-4 py-2 rounded-md text-sm font-medium text-white"
+            style={{ background: canSubmit ? "#2563EB" : "#CBD5E1", cursor: canSubmit ? "pointer" : "not-allowed" }}
+          >
+            {creating ? "Creating…" : "Create Campaign (draft)"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 
 // ─── Static UI data (unchanged mocks kept for screens not yet wired) ─────────
 
@@ -1489,16 +1670,16 @@ function ContactsScreen() {
 function BroadcastsScreen() {
   const [view, setView] = useState<"list" | "create">("list");
   const { data, loading, error, refresh } = useBroadcasts({ page: 1, page_size: 50 });
-  const { queue, queueing } = useQueueBroadcast();
+  const { send, sending } = useSendBroadcast();
 
-  const handleQueue = async (broadcastId: string) => {
+  const handleSend = async (broadcastId: string) => {
     if (!confirm("Send this broadcast now? This cannot be undone.")) return;
     try {
-      await queue(broadcastId);
+      await send(broadcastId);
       refresh();
       alert("Broadcast queued for sending.");
     } catch (err) {
-      alert(`Failed to queue: ${(err as Error).message}`);
+      alert(`Failed to send: ${(err as Error).message}`);
     }
   };
 
@@ -1519,7 +1700,7 @@ function BroadcastsScreen() {
         </div>
         <button
           onClick={() => setView("create")}
-          className="px-4 py-2 rounded-md text-sm font-medium text-white flex items-center gap-2"
+          className="px-4 py-2 rounded-md text-sm font-medium text-white"
           style={{ background: "#2563EB", cursor: "pointer" }}
         >
           + Create Campaign
@@ -1539,11 +1720,11 @@ function BroadcastsScreen() {
             <thead style={{ background: "#F8FAFC" }}>
               <tr>
                 <th className="text-left px-4 py-2 font-medium" style={{ color: "#475569" }}>Name</th>
+                <th className="text-left px-4 py-2 font-medium" style={{ color: "#475569" }}>Branch</th>
                 <th className="text-left px-4 py-2 font-medium" style={{ color: "#475569" }}>Template</th>
-                <th className="text-left px-4 py-2 font-medium" style={{ color: "#475569" }}>Audience</th>
+                <th className="text-left px-4 py-2 font-medium" style={{ color: "#475569" }}>Recipients</th>
                 <th className="text-left px-4 py-2 font-medium" style={{ color: "#475569" }}>Status</th>
-                <th className="text-left px-4 py-2 font-medium" style={{ color: "#475569" }}>Sent</th>
-                <th className="text-left px-4 py-2 font-medium" style={{ color: "#475569" }}>Delivered</th>
+                <th className="text-left px-4 py-2 font-medium" style={{ color: "#475569" }}>Created</th>
                 <th className="text-left px-4 py-2 font-medium" style={{ color: "#475569" }}>Actions</th>
               </tr>
             </thead>
@@ -1551,8 +1732,9 @@ function BroadcastsScreen() {
               {broadcasts.map((b) => (
                 <tr key={b.id} style={{ borderTop: "1px solid #F1F5F9" }}>
                   <td className="px-4 py-2" style={{ color: "#0F172A" }}>{b.name}</td>
+                  <td className="px-4 py-2" style={{ color: "#475569" }}>{b.branch_name}</td>
                   <td className="px-4 py-2 font-mono text-xs" style={{ color: "#334155" }}>{b.template_name}</td>
-                  <td className="px-4 py-2" style={{ color: "#475569" }}>{b.audience_size}</td>
+                  <td className="px-4 py-2" style={{ color: "#475569" }}>{b.recipient_count}</td>
                   <td className="px-4 py-2">
                     <span
                       className="px-2 py-0.5 text-xs rounded-full font-medium"
@@ -1572,17 +1754,18 @@ function BroadcastsScreen() {
                       {b.status}
                     </span>
                   </td>
-                  <td className="px-4 py-2" style={{ color: "#475569" }}>{b.sent_count}</td>
-                  <td className="px-4 py-2" style={{ color: "#475569" }}>{b.delivered_count}</td>
+                  <td className="px-4 py-2 text-xs" style={{ color: "#64748B" }}>
+                    {new Date(b.created_at).toLocaleString()}
+                  </td>
                   <td className="px-4 py-2">
-                    {b.status === "draft" && (
+                    {(b.status === "draft" || b.status === "scheduled") && (
                       <button
-                        onClick={() => handleQueue(b.id)}
-                        disabled={queueing}
+                        onClick={() => handleSend(b.id)}
+                        disabled={sending}
                         className="text-xs px-3 py-1 rounded-md text-white font-medium"
-                        style={{ background: queueing ? "#CBD5E1" : "#2563EB" }}
+                        style={{ background: sending ? "#CBD5E1" : "#2563EB" }}
                       >
-                        {queueing ? "Sending…" : "Send Now"}
+                        {sending ? "Sending…" : "Send Now"}
                       </button>
                     )}
                   </td>

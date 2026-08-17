@@ -601,7 +601,7 @@ async def cancel_broadcast(
     if campaign is None:
         raise HTTPException(status_code=404, detail="Broadcast not found")
 
-    if campaign.status in (CampaignStatus.sent, CampaignStatus.failed, CampaignStatus.canceled):
+    if campaign.status in (CampaignStatus.completed, CampaignStatus.failed, CampaignStatus.canceled):
         # Already terminal — nothing to do, but not an error either.
         return CancelResponse(status=campaign.status.value, campaign_id=str(campaign.id))
 

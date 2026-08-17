@@ -54,7 +54,8 @@ engine = create_async_engine(
     max_overflow=settings.db_max_overflow,
     pool_timeout=settings.db_pool_timeout_seconds,
     pool_pre_ping=True,
-    echo=settings.db_echo_sql
+    echo=settings.db_echo_sql,
+    connect_args={"prepare_threshold": None},
 )
 
 AsyncSessionLocal: async_sessionmaker[AsyncSession] = async_sessionmaker(

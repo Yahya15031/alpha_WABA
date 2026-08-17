@@ -53,7 +53,7 @@ INSERT INTO templates (
     'd206b6b3-cc46-4d67-a1f2-ecb5399c9fdd',
     'aaaaaaaa-a1ed-a1ed-a1ed-aaaaaaaaaaaa',
     'faculty_meeting_update_v2',
-    'en_US',
+    'en',
     'utility',
     'approved',
     'Dear Faculty Members,

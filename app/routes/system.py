@@ -25,6 +25,25 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["system"])
 
 
+@router.get("/deploy-info")
+async def deploy_info() -> dict:
+    """Which git commit is this service actually running?"""
+    import os
+    import subprocess
+
+    try:
+        sha = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd="/opt/render/project/src"
+        ).decode().strip()
+    except Exception:
+        sha = os.getenv("RENDER_GIT_COMMIT", "unknown")
+    return {
+        "commit": sha[:12],
+        "python_version": os.getenv("PYTHON_VERSION", "unknown"),
+        "service": os.getenv("RENDER_SERVICE_NAME", "unknown"),
+    }
+
+
 class LaneStatus(BaseModel):
     depth: int
     active: bool

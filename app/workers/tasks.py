@@ -72,6 +72,13 @@ async def send_message_task(
     recipient_uuid = uuid.UUID(campaign_recipient_id)
     tenant_uuid = uuid.UUID(tenant_id)
 
+    logger.info(
+        "send_message_task START recipient=%s tenant=%s attempt=%d",
+        campaign_recipient_id,
+        tenant_id,
+        ctx.get("job_try", 1),
+    )
+
     # ---- Session 1: load + mark queued ----
     async with get_worker_session(tenant_uuid) as session:
         recipient = await session.get(CampaignRecipient, recipient_uuid)
@@ -507,6 +514,12 @@ async def materialize_campaign_task(
     """
     campaign_uuid = uuid.UUID(campaign_id)
     tenant_uuid = uuid.UUID(tenant_id)
+
+    logger.info(
+        "materialize_campaign_task START campaign=%s tenant=%s",
+        campaign_id,
+        tenant_id,
+    )
 
     # ---- Session: load, materialize, mark running ----
     lane_for_sends: CampaignLane = CampaignLane.bulk

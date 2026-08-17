@@ -38,6 +38,10 @@ async function request<T>(path: string, opts: RequestOptions): Promise<T> {
     try {
       const body = await res.json();
       detail = body.detail || detail;
+      // Attach body to Error for richer UI reporting
+      const err: any = new ApiError(res.status, detail);
+      err.body = body;
+      throw err;
     } catch {
       /* ignore body parse errors */
     }

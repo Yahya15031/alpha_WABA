@@ -1677,11 +1677,17 @@ function BroadcastsScreen() {
   const handleSend = async (broadcastId: string) => {
     if (!confirm("Send this broadcast now? This cannot be undone.")) return;
     try {
-      await send(broadcastId);
+      const result = await send(broadcastId);
       refresh();
-      alert("Broadcast queued for sending.");
+      alert(`Broadcast queued for sending. Campaign ID: ${result.campaign_id}`);
     } catch (err) {
-      alert(`Failed to send: ${(err as Error).message}`);
+      // Show the real error, not just the generic "Failed to fetch" wrapper
+      const e = err as Error & { status?: number; body?: unknown };
+      const detail = e.status
+        ? `HTTP ${e.status}: ${e.message}${e.body ? " — " + JSON.stringify(e.body) : ""}`
+        : e.message;
+      alert(`Send failed:\n\n${detail}\n\nCheck Render logs for the full traceback.`);
+      console.error("Send failed detail:", err);
     }
   };
 

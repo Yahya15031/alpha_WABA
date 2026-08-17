@@ -52,6 +52,17 @@ class TransactionalWorkerSettings:
         materialize_campaign_task,
     ]
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
+    # Log the commit the worker was booted with (optional). If available,
+    # this helps tie worker logs to a specific deploy. Keep minimal risk —
+    # swallow failures.
+    try:
+        import subprocess, os
+
+        _sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=os.getcwd()).decode().strip()
+        boot_info = {"boot_commit": _sha[:12]}
+    except Exception:
+        boot_info = {"boot_commit": os.getenv("RENDER_GIT_COMMIT", "unknown")}
+    worker_boot_info = boot_info
     # Reduce heartbeat frequency to 5 minutes (was ~30s default)
     health_check_interval = 300
     # When queue is empty, poll every 2 seconds (was ~0.5s default)
@@ -76,6 +87,14 @@ class BulkWorkerSettings:
         materialize_campaign_task,
     ]
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
+    try:
+        import subprocess, os
+
+        _sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=os.getcwd()).decode().strip()
+        boot_info = {"boot_commit": _sha[:12]}
+    except Exception:
+        boot_info = {"boot_commit": os.getenv("RENDER_GIT_COMMIT", "unknown")}
+    worker_boot_info = boot_info
     health_check_interval = 300
     poll_delay = 2.0
     max_jobs = 10

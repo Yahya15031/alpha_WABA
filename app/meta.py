@@ -101,6 +101,22 @@ class MetaCloudAPIClient:
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
                 response = await client.post(url, json=payload, headers=headers)
+                if response.status_code != 200:
+                    try:
+                        text = response.text
+                    except Exception:
+                        text = "<unreadable>"
+                    logger.warning(
+                        "Meta send failed status=%d body=%s payload_sent=%s",
+                        response.status_code,
+                        (text[:500] if text else ""),
+                        {
+                            "to": to_phone_e164,
+                            "template": template_name,
+                            "language": language_code,
+                            "variables": body_variables,
+                        },
+                    )
                 return self._parse_response(response)
         except httpx.TimeoutException:
             logger.warning("Meta API timeout: phone=%s", phone_number_id)
@@ -160,6 +176,8 @@ class MetaCloudAPIClient:
                 retry_after_seconds=None,
                 raw_response=data,
             )
+
+        # _parse_response should remain pure and not reference caller locals
 
         error = data.get("error", {}) if isinstance(data, dict) else {}
         return MetaSendResult(

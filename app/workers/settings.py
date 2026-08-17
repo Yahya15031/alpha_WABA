@@ -59,8 +59,8 @@ class TransactionalWorkerSettings:
     max_jobs = 10
     job_timeout = 30  # seconds
     keep_result = 3600  # keep result rows for 1 hour for debugging
-    max_tries = 5
-
+    max_tries = 2          # was default 5 — retry once on failure, then dead-letter
+    retry_jobs = True      # explicit, don't rely on default
 
 class BulkWorkerSettings:
     """High-throughput lane.
@@ -81,4 +81,5 @@ class BulkWorkerSettings:
     max_jobs = 10
     job_timeout = 30
     keep_result = 3600
-    max_tries = 5
+    max_tries = 2
+    retry_jobs = True

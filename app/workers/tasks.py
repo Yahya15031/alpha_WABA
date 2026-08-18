@@ -136,7 +136,7 @@ async def send_message_task(
     # Build body variables in template order (indices 1..N)
     body_variables: list[str] = []
     for i, var_def in enumerate(variable_definitions):
-        idx = str(var_def.get("index", i + 1))
+        idx = str(var_def.get("name") or var_def.get("index", i + 1))
         body_variables.append(str(resolved_variables.get(idx, "")))
 
     # ---- Call Meta (no DB session held) ----
@@ -604,6 +604,7 @@ async def materialize_campaign_task(
             resolved: dict[str, str] = {}
             for var_def in template_variables:
                 idx = str(var_def.get("name") or var_def.get("index") or "")
+
                 if not idx:
                     continue
                 path = variable_mappings.get(idx, "")

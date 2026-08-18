@@ -62,13 +62,13 @@ class MetaCloudAPIClient:
 
     async def send_template_message(
         self,
-        *,
-        phone_number_id: str,
-        to_phone_e164: str,
-        template_name: str,
-        language_code: str,
-        body_variables: list[str],
-    ) -> MetaSendResult:
+    *,
+    phone_number_id: str,
+    to_phone_e164: str,
+    template_name: str,
+    language_code: str,
+    body_parameters: list[dict[str, Any]],   # changed from body_variables
+) -> MetaSendResult:
         """POST /{phone_number_id}/messages with a template payload.
 
         Meta expects `to` without the leading `+`. We strip it here so the
@@ -77,19 +77,19 @@ class MetaCloudAPIClient:
         url = f"{self._base_url}/{phone_number_id}/messages"
 
         payload: dict[str, Any] = {
-            "messaging_product": "whatsapp",
-            "to": to_phone_e164.lstrip("+"),
-            "type": "template",
-            "template": {
-                "name": template_name,
-                "language": {"code": language_code},
-            },
-        }
-        if body_variables:
+        "messaging_product": "whatsapp",
+        "to": to_phone_e164.lstrip("+"),
+        "type": "template",
+        "template": {
+            "name": template_name,
+            "language": {"code": language_code},
+        },
+    }
+        if body_parameters:
             payload["template"]["components"] = [
                 {
                     "type": "body",
-                    "parameters": [{"type": "text", "text": v} for v in body_variables],
+                    "parameters": body_parameters,
                 }
             ]
 

@@ -133,11 +133,20 @@ async def send_message_task(
         recipient.status = RecipientStatus.queued
         recipient.queued_at = datetime.now(timezone.utc)
 
-    # Build body variables in template order (indices 1..N)
-    body_variables: list[str] = []
+    
+# Build body parameters in template order, preserving names for named
+    # templates. Meta requires parameter_name in the payload for {{name}}
+    # templates; for positional {{1}} templates parameter_name is optional
+    # but harmless to omit.
+    body_params: list[dict[str, str]] = []
     for i, var_def in enumerate(variable_definitions):
-        idx = str(var_def.get("name") or var_def.get("index", i + 1))
-        body_variables.append(str(resolved_variables.get(idx, "")))
+        var_name = var_def.get("name")
+        idx_key = str(var_name) if var_name else str(var_def.get("index", i + 1))
+        value = str(resolved_variables.get(idx_key, ""))
+        param: dict[str, str] = {"type": "text", "text": value}
+        if var_name:
+            param["parameter_name"] = str(var_name)
+        body_params.append(param)
 
     # ---- Call Meta (no DB session held) ----
     client = get_meta_client()
@@ -146,7 +155,7 @@ async def send_message_task(
         to_phone_e164=phone_e164,
         template_name=template_name,
         language_code=language_code,
-        body_variables=body_variables,
+        body_parameters=body_params,
     )
 
     # ---- Session 2: write result ----

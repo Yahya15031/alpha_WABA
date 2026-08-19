@@ -240,9 +240,8 @@ const navItems = [
   { id: "dashboard", label: "Dashboard",            icon: LayoutDashboard },
   { id: "contacts",  label: "Contacts",             icon: Users },
   { id: "campaigns", label: "Broadcast Campaigns",  icon: Megaphone },
-  { id: "logs",      label: "Message Logs",         icon: Activity },
+    { id: "logs",      label: "Message Logs",         icon: Activity },
   { id: "templates", label: "Message Templates",    icon: FileText },
-  { id: "analytics", label: "Analytics",            icon: BarChart2 },
 ];
 
 const MESSAGE_TEMPLATES = [

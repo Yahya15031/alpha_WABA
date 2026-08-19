@@ -11,7 +11,7 @@ import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, PieChart, Pie, Cell,
 } from "recharts";
-
+import { ToastProvider, useToast } from "./Toast";
 import { FullPageLoader, LoginScreen, useAuth } from "../auth";
 import {
   useBranches,
@@ -29,7 +29,9 @@ import {
 import type { CampaignStatusCounts, LatestBroadcast } from "../api";
 import type { UploadResponse } from "../api";
 function BroadcastCreateForm({ onDone, onCancel }: { onDone: () => void; onCancel: () => void }) {
+  const toast = useToast();
   const [name, setName] = useState("");
+
   const [templateId, setTemplateId] = useState("");
   const [phoneNumberId, setPhoneNumberId] = useState("");
   const [branchId, setBranchId] = useState("");
@@ -58,7 +60,7 @@ function BroadcastCreateForm({ onDone, onCancel }: { onDone: () => void; onCance
     Object.values(variableMappings).every((v) => v.trim().length > 0) &&
     !creating;
 
-  const handleSubmit = async () => {
+    const handleSubmit = async () => {
     if (!canSubmit) return;
     try {
       const literalMappings: Record<string, string> = {};
@@ -76,11 +78,22 @@ function BroadcastCreateForm({ onDone, onCancel }: { onDone: () => void; onCance
         lane: "bulk",
         schedule: "immediate",
       });
+      toast.push({
+        variant: "success",
+        message: "Campaign created successfully.",
+      });
       onDone();
     } catch (err) {
-      alert(`Failed to create campaign: ${(err as Error).message}`);
+      const e = err as Error & { status?: number; body?: unknown };
+      toast.push({
+        variant: "error",
+        message: "Failed to create campaign",
+        detail: e.body ? JSON.stringify(e.body) : e.message,
+        status: e.status,
+      });
     }
   };
+
 
   return (
     <div className="p-6 max-w-2xl mx-auto">
@@ -1017,7 +1030,9 @@ function phonesToCsvFile(parsed: ParsedPhoneLine[]): File {
 }
 
 function ContactsScreen() {
+  const toast = useToast();
   const [search, setSearch] = useState("");
+
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [branchFilter, setBranchFilter] = useState<string>("");
   const [page, setPage] = useState(1);
@@ -1070,13 +1085,13 @@ function ContactsScreen() {
     setPage(1);
   }, [debouncedSearch, branchFilter]);
 
-  const handleFileChosen = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const handleFileChosen = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     e.target.value = "";
     const branchId = branchFilter || branches[0]?.id;
     if (!branchId) {
-      alert("Please select a branch before uploading contacts.");
+      toast.push({ variant: "error", message: "Branch Required", detail: "Please select a branch before uploading contacts." });
       return;
     }
     try {
@@ -1084,18 +1099,24 @@ function ContactsScreen() {
       setPendingPreview({ file, branchId, preview, source: "file" });
       setShowUploadDialog(false);
     } catch (err) {
-      alert(`Upload failed: ${(err as Error).message}`);
+      const ex = err as Error & { status?: number; body?: any };
+      toast.push({
+        variant: "error",
+        message: "Upload Failed",
+        detail: ex.body ? JSON.stringify(ex.body) : ex.message,
+        status: ex.status,
+      });
     }
   };
 
   const handlePasteSubmit = async () => {
     const branchId = branchFilter || branches[0]?.id;
     if (!branchId) {
-      alert("Please select a branch before uploading contacts.");
+      toast.push({ variant: "error", message: "Branch Required", detail: "Please select a branch before uploading contacts." });
       return;
     }
     if (validPastedCount === 0) {
-      alert("No valid phone numbers to import.");
+      toast.push({ variant: "error", message: "No Valid Numbers", detail: "No valid phone numbers to import." });
       return;
     }
     const file = phonesToCsvFile(parsedPastes);
@@ -1105,7 +1126,13 @@ function ContactsScreen() {
       setShowUploadDialog(false);
       setPastedText("");
     } catch (err) {
-      alert(`Upload failed: ${(err as Error).message}`);
+      const ex = err as Error & { status?: number; body?: any };
+      toast.push({
+        variant: "error",
+        message: "Upload Failed",
+        detail: ex.body ? JSON.stringify(ex.body) : ex.message,
+        status: ex.status,
+      });
     }
   };
 
@@ -1120,10 +1147,18 @@ function ContactsScreen() {
       setUploadResult(result);
       setPendingPreview(null);
       refresh();
+      toast.push({ variant: "success", message: "Import Complete", detail: `Imported ${result.valid} contacts.` });
     } catch (err) {
-      alert(`Commit failed: ${(err as Error).message}`);
+      const ex = err as Error & { status?: number; body?: any };
+      toast.push({
+        variant: "error",
+        message: "Commit Failed",
+        detail: ex.body ? JSON.stringify(ex.body) : ex.message,
+        status: ex.status,
+      });
     }
   };
+
 
   const contacts = data?.data ?? [];
   const total = data?.pagination.total ?? 0;
@@ -1673,21 +1708,21 @@ function BroadcastsScreen() {
   const { data, loading, error, refresh } = useBroadcasts({ page: 1, page_size: 50 });
   const { send, sending } = useSendBroadcast();
   const { cancel, canceling } = useCancelBroadcast();
-
-  const handleSend = async (broadcastId: string) => {
+  const toast=useToast();
+    const handleSend = async (broadcastId: string) => {
     if (!confirm("Send this broadcast now? This cannot be undone.")) return;
     try {
       const result = await send(broadcastId);
       refresh();
-      alert(`Broadcast queued for sending. Campaign ID: ${result.campaign_id}`);
+      toast.push({ variant: "success", message: "Broadcast Queued", detail: `Campaign ID: ${result.campaign_id}` });
     } catch (err) {
-      // Show the real error, not just the generic "Failed to fetch" wrapper
-      const e = err as Error & { status?: number; body?: unknown };
-      const detail = e.status
-        ? `HTTP ${e.status}: ${e.message}${e.body ? " — " + JSON.stringify(e.body) : ""}`
-        : e.message;
-      alert(`Send failed:\n\n${detail}\n\nCheck Render logs for the full traceback.`);
-      console.error("Send failed detail:", err);
+      const e = err as Error & { status?: number; body?: any };
+      toast.push({
+        variant: "error",
+        message: "Send Failed",
+        detail: e.body ? JSON.stringify(e.body) : e.message,
+        status: e.status,
+      });
     }
   };
 
@@ -1696,10 +1731,18 @@ function BroadcastsScreen() {
     try {
       await cancel(broadcastId);
       refresh();
+      toast.push({ variant: "success", message: "Broadcast Canceled", detail: "Stopped further sending." });
     } catch (err) {
-      alert(`Failed to cancel: ${(err as Error).message}`);
+      const e = err as Error & { status?: number; body?: any };
+      toast.push({
+        variant: "error",
+        message: "Cancel Failed",
+        detail: e.body ? JSON.stringify(e.body) : e.message,
+        status: e.status,
+      });
     }
   };
+
 
   if (view === "create") {
     return <BroadcastCreateForm onDone={() => { setView("list"); refresh(); }} onCancel={() => setView("list")} />;
@@ -1807,7 +1850,124 @@ function BroadcastsScreen() {
   );
 }
 
+function TemplatesScreen() {
+  const { templates, loading, error } = useTemplates();
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const statusStyle = (status: string) => ({
+    background: status === "approved" ? "#DCFCE7" : status === "pending" ? "#FEF3C7" : "#FEE2E2",
+    color: status === "approved" ? "#166534" : status === "pending" ? "#92400E" : "#991B1B",
+  });
+  return (
+    <div className="p-6 max-w-5xl mx-auto">
+      <div className="mb-6">
+        <h1 className="text-2xl font-semibold" style={{ color: "#0F172A" }}>Message Templates</h1>
+        <p className="text-sm mt-1" style={{ color: "#64748B" }}>
+          {templates.length > 0 ? `${templates.length} template${templates.length !== 1 ? "s" : ""}` : "Loading…"}
+        </p>
+      </div>
+      {error && (
+        <div className="p-4 rounded-md text-sm mb-4" style={{ background: "#FEF2F2", color: "#991B1B", border: "1px solid #FECACA" }}>
+          Failed to load templates: {error}
+        </div>
+      )}
+      {loading && templates.length === 0 && (
+        <div className="p-8 text-center text-sm" style={{ color: "#64748B" }}>Loading templates…</div>
+      )}
+      {!loading && templates.length === 0 && !error && (
+        <div className="p-8 text-center text-sm rounded-lg" style={{ background: "#F8FAFC", color: "#64748B", border: "1px solid #E2E8F0" }}>
+          No templates yet. Templates are created and approved in Meta's WhatsApp Manager, then registered here.
+        </div>
+      )}
+      <div className="space-y-3">
+        {templates.map((t) => {
+          const isOpen = expandedId === t.id;
+          const varCount = t.variable_definitions?.length ?? 0;
+          return (
+            <div
+              key={t.id}
+              className="rounded-lg overflow-hidden"
+              style={{ border: "1px solid #E2E8F0", background: "#fff" }}
+            >
+              <button
+                onClick={() => setExpandedId(isOpen ? null : t.id)}
+                className="w-full flex items-center justify-between px-4 py-3 text-left"
+                style={{ cursor: "pointer" }}
+              >
+                <div className="flex items-center gap-3">
+                  <span className="font-medium text-sm" style={{ color: "#0F172A" }}>{t.name}</span>
+                  <span className="text-xs px-2 py-0.5 rounded-full font-medium" style={statusStyle(t.status)}>
+                    {t.status}
+                  </span>
+                  <span className="text-xs" style={{ color: "#94A3B8" }}>{t.language_code}</span>
+                  <span className="text-xs" style={{ color: "#94A3B8" }}>{t.category}</span>
+                </div>
+                <div className="flex items-center gap-3">
+                  {varCount > 0 && (
+                    <span className="text-xs" style={{ color: "#64748B" }}>
+                      {varCount} variable{varCount !== 1 ? "s" : ""}
+                    </span>
+                  )}
+                  <span style={{ color: "#94A3B8", transform: isOpen ? "rotate(180deg)" : "none", transition: "transform 0.15s" }}>
+                    ▾
+                  </span>
+                </div>
+              </button>
+              {isOpen && (
+                <div className="px-4 pb-4" style={{ borderTop: "1px solid #F1F5F9" }}>
+                  <div
+                    className="mt-3 p-3 rounded-md text-sm whitespace-pre-wrap"
+                    style={{ background: "#F8FAFC", color: "#334155", lineHeight: 1.6 }}
+                  >
+                    {renderTemplateBody(t.body_text)}
+                  </div>
+                  {varCount > 0 && (
+                    <div className="mt-3">
+                      <div className="text-xs uppercase font-medium mb-2" style={{ color: "#94A3B8" }}>
+                        Variables
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {t.variable_definitions.map((v: any, i: number) => {
+                          const key = v.name ?? v.index ?? i + 1;
+                          return (
+                            <span
+                              key={i}
+                              className="text-xs px-2 py-1 rounded font-mono"
+                              style={{ background: "#EFF6FF", color: "#1E40AF" }}
+                              title={v.description || ""}
+                            >
+                              {"{{"}{key}{"}}"} {v.example ? `— e.g. "${v.example}"` : ""}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+// Highlights {{variable}} placeholders subtly within body text — soft
+// background, not garish, matches the app's restrained visual language.
+function renderTemplateBody(text: string) {
+  const parts = text.split(/(\{\{[^}]+\}\})/g);
+  return parts.map((part, i) =>
+    /^\{\{[^}]+\}\}$/.test(part) ? (
+      <span key={i} style={{ background: "#DBEAFE", color: "#1E40AF", borderRadius: 3, padding: "0 3px" }}>
+        {part}
+      </span>
+    ) : (
+      <span key={i}>{part}</span>
+    ),
+  );
+}
+
 function LogsScreen() {
+
   return (
     <>
       <MockDataBanner label="Message Logs" />
@@ -1834,10 +1994,11 @@ export default function App() {
   if (!session) return <LoginScreen />;
   if (!me) return <FullPageLoader label="Fetching account…" />;
 
-  const handleNavigate = (id: string) => {
+    const handleNavigate = (id: string) => {
     if (id === "contacts") setScreen("contacts");
     else if (id === "campaigns") setScreen("campaign");
     else if (id === "logs") setScreen("logs");
+    else if (id === "templates") setScreen("templates");
     else setScreen("dashboard");
   };
 
@@ -1845,10 +2006,13 @@ export default function App() {
     screen === "contacts" ? "contacts" :
     screen === "campaign" ? "campaigns" :
     screen === "logs" ? "logs" :
+    screen === "templates" ? "templates" :
     "dashboard";
 
+
   return (
-    <div
+    <ToastProvider>
+    {<div
       className="flex h-screen w-full overflow-hidden"
       style={{ fontFamily: "'Inter', system-ui, -apple-system, sans-serif", background: "#F1F5F9" }}
     >
@@ -1870,12 +2034,15 @@ export default function App() {
             flexDirection: "column",
           }}
         >
-          {screen === "dashboard" && <DashboardScreen />}
+                    {screen === "dashboard" && <DashboardScreen />}
           {screen === "contacts"  && <ContactsScreen />}
           {screen === "campaign"  && <BroadcastsScreen />}
           {screen === "logs"      && <LogsScreen />}
+          {screen === "templates" && <TemplatesScreen />}
+
         </main>
       </div>
-    </div>
+    </div>}
+    </ToastProvider>
   );
 }

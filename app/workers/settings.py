@@ -96,7 +96,7 @@ class BulkWorkerSettings:
         boot_info = {"boot_commit": os.getenv("RENDER_GIT_COMMIT", "unknown")}
     worker_boot_info = boot_info
     health_check_interval = 300
-    poll_delay = 2.0
+    poll_delay = 5.0
     max_jobs = 10
     job_timeout = 30
     keep_result = 3600

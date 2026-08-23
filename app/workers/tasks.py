@@ -217,7 +217,8 @@ async def send_message_task(
                 result.error_code,
                 result.error_message,
             )
-
+            
+        await _maybe_mark_campaign_completed(session, recipient.campaign_id)
     return {
         "success": result.success,
         "meta_message_id": result.meta_message_id,
@@ -409,7 +410,24 @@ async def _apply_status_updates(session, payload: dict) -> None:
             await _bump_campaign_stats(
                 session, recipient.campaign_id, old_status, new_status
             )
-
+async def _maybe_mark_campaign_completed(session, campaign_id: uuid.UUID) -> None:
+    """If no recipients remain pending/queued, the campaign has finished
+    sending — flip it to completed. Delivery/read status can keep updating
+    after this via webhooks; that doesn't block completion, only "has
+    everything been attempted" does.
+    """
+    result = await session.execute(
+        text(
+            "SELECT COUNT(*) FROM campaign_recipients "
+            "WHERE campaign_id = :cid AND status IN ('pending', 'queued')"
+        ),
+        {"cid": str(campaign_id)},
+    )
+    remaining = result.scalar()
+    if remaining == 0:
+        campaign = await session.get(Campaign, campaign_id)
+        if campaign and campaign.status == CampaignStatus.running:
+            campaign.status = CampaignStatus.completed
 
 # ---------------------------------------------------------------------------
 # campaign_stats bump helper
@@ -648,6 +666,8 @@ async def materialize_campaign_task(
             {"n": len(recipient_ids), "cid": str(campaign_uuid)},
         )
         campaign.status = CampaignStatus.running
+
+        
 
     # ---- Fan out send tasks (outside the DB transaction) ----
     from app.workers.router import enqueue_send

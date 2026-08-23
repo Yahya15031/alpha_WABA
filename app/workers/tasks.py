@@ -217,7 +217,7 @@ async def send_message_task(
                 result.error_code,
                 result.error_message,
             )
-            
+        await session.flush()    
         await _maybe_mark_campaign_completed(session, recipient.campaign_id)
     return {
         "success": result.success,

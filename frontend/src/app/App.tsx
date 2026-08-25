@@ -25,6 +25,9 @@ import {
   useCancelBroadcast,
   useTemplates,
   useUploadContacts,
+  useGroups,           
+  useCreateGroup,      
+  useUploadToGroup     
 } from "./hooks";
 import type { CampaignStatusCounts, LatestBroadcast } from "../api";
 import type { UploadResponse } from "../api";
@@ -35,7 +38,10 @@ function BroadcastCreateForm({ onDone, onCancel }: { onDone: () => void; onCance
   const [templateId, setTemplateId] = useState("");
   const [phoneNumberId, setPhoneNumberId] = useState("");
   const [branchId, setBranchId] = useState("");
-  const [audienceType, setAudienceType] = useState<"all_contacts" | "branch_group">("all_contacts");
+  const { groups } = useGroups();
+  const [audienceType, setAudienceType] = useState<"all_contacts" | "branch_group" | "group">("all_contacts");
+  const [selectedGroupId, setSelectedGroupId] = useState("");
+
   const [variableMappings, setVariableMappings] = useState<Record<string, string>>({});
 
   const { templates, loading: tplLoading } = useTemplates();
@@ -57,6 +63,7 @@ function BroadcastCreateForm({ onDone, onCancel }: { onDone: () => void; onCance
 
   const canSubmit =
     name.trim() && templateId && phoneNumberId && branchId &&
+    (audienceType !== "group" || selectedGroupId) &&
     Object.values(variableMappings).every((v) => v.trim().length > 0) &&
     !creating;
 
@@ -74,7 +81,7 @@ function BroadcastCreateForm({ onDone, onCancel }: { onDone: () => void; onCance
         template_id: templateId,
         variable_mappings: literalMappings,
         audience_type: audienceType,
-        audience_config: {},
+        audience_config: audienceType === "group" ? { group_id: selectedGroupId } : {},
         lane: "bulk",
         schedule: "immediate",
       });
@@ -114,17 +121,30 @@ function BroadcastCreateForm({ onDone, onCancel }: { onDone: () => void; onCance
         </div>
 
         <div>
-          <label className="text-sm font-medium block mb-1" style={{ color: "#334155" }}>Owning branch</label>
+          <label className="text-sm font-medium block mb-1" style={{ color: "#334155" }}>Audience</label>
           <select
-            value={branchId} onChange={(e) => setBranchId(e.target.value)}
-            className="w-full px-3 py-2 text-sm rounded-md outline-none"
+            value={audienceType}
+            onChange={(e) => setAudienceType(e.target.value as typeof audienceType)}
+            className="w-full px-3 py-2 text-sm rounded-md outline-none mb-2"
             style={{ border: "1px solid #E2E8F0", background: "#fff" }}
           >
-            <option value="">Select a branch</option>
-            {branches.map((b) => (
-              <option key={b.id} value={b.id}>{b.name}</option>
-            ))}
+            <option value="all_contacts">All contacts in tenant</option>
+            <option value="branch_group">Only the owning branch</option>
+            <option value="group">A specific group</option>
           </select>
+          {audienceType === "group" && (
+            <select
+              value={selectedGroupId}
+              onChange={(e) => setSelectedGroupId(e.target.value)}
+              className="w-full px-3 py-2 text-sm rounded-md outline-none"
+              style={{ border: "1px solid #E2E8F0", background: "#fff" }}
+            >
+              <option value="">Select a group</option>
+              {groups.map((g) => (
+                <option key={g.id} value={g.id}>{g.name} ({g.member_count})</option>
+              ))}
+            </select>
+          )}
         </div>
 
         <div>
@@ -1027,6 +1047,242 @@ function phonesToCsvFile(parsed: ParsedPhoneLine[]): File {
   const blob = new Blob([rows.join("\n")], { type: "text/csv" });
   return new File([blob], "pasted-phones.csv", { type: "text/csv" });
 }
+function GroupsPanel() {
+  const { groups, loading, error, refresh } = useGroups();
+  const { create, creating } = useCreateGroup();
+  const { upload, uploading } = useUploadToGroup();
+  const toast = useToast();
+
+  const [showCreateDialog, setShowCreateDialog] = useState(false);
+  const [newGroupName, setNewGroupName] = useState("");
+  const [newGroupDesc, setNewGroupDesc] = useState("");
+
+  const [uploadTargetGroup, setUploadTargetGroup] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [pendingUploadResult, setPendingUploadResult] = useState<{
+    groupId: string;
+    file: File;
+    result: GroupUploadResponse;
+  } | null>(null);
+
+  const handleCreateGroup = async () => {
+    if (!newGroupName.trim()) return;
+    try {
+      await create(newGroupName.trim(), newGroupDesc.trim() || undefined);
+      toast.push({ variant: "success", message: `Group "${newGroupName}" created.` });
+      setShowCreateDialog(false);
+      setNewGroupName("");
+      setNewGroupDesc("");
+      refresh();
+    } catch (err) {
+      const e = err as Error & { status?: number; body?: unknown };
+      toast.push({
+        variant: "error",
+        message: "Failed to create group",
+        detail: e.body ? JSON.stringify(e.body) : e.message,
+        status: e.status,
+      });
+    }
+  };
+
+  const handleFileChosen = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !uploadTargetGroup) return;
+    e.target.value = "";
+    try {
+      const result = await upload(uploadTargetGroup, file, false);
+      setPendingUploadResult({ groupId: uploadTargetGroup, file, result });
+    } catch (err) {
+      const e2 = err as Error & { status?: number; body?: unknown };
+      toast.push({
+        variant: "error",
+        message: "Failed to preview upload",
+        detail: e2.body ? JSON.stringify(e2.body) : e2.message,
+        status: e2.status,
+      });
+    }
+  };
+
+  const confirmUpload = async () => {
+    if (!pendingUploadResult) return;
+    try {
+      const result = await upload(pendingUploadResult.groupId, pendingUploadResult.file, true);
+      toast.push({
+        variant: "success",
+        message: `Added ${result.matched} contact${result.matched !== 1 ? "s" : ""} to group.`,
+      });
+      setPendingUploadResult(null);
+      setUploadTargetGroup(null);
+      refresh();
+    } catch (err) {
+      const e = err as Error & { status?: number; body?: unknown };
+      toast.push({
+        variant: "error",
+        message: "Failed to commit upload",
+        detail: e.body ? JSON.stringify(e.body) : e.message,
+        status: e.status,
+      });
+    }
+  };
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4">
+        <p className="text-sm" style={{ color: "#64748B" }}>
+          {groups.length > 0 ? `${groups.length} group${groups.length !== 1 ? "s" : ""}` : "No groups yet"}
+        </p>
+        <button
+          onClick={() => setShowCreateDialog(true)}
+          className="px-4 py-2 rounded-md text-sm font-medium text-white"
+          style={{ background: "#2563EB" }}
+        >
+          + Create Group
+        </button>
+      </div>
+
+      {error && (
+        <div className="p-4 rounded-md text-sm mb-4" style={{ background: "#FEF2F2", color: "#991B1B" }}>
+          Failed to load groups: {error}
+        </div>
+      )}
+      {loading && groups.length === 0 && (
+        <div className="p-8 text-center text-sm" style={{ color: "#64748B" }}>Loading…</div>
+      )}
+
+      <div className="space-y-2">
+        {groups.map((g) => (
+          <div
+            key={g.id}
+            className="flex items-center justify-between px-4 py-3 rounded-lg"
+            style={{ border: "1px solid #E2E8F0", background: "#fff" }}
+          >
+            <div>
+              <div className="font-medium text-sm" style={{ color: "#0F172A" }}>{g.name}</div>
+              {g.description && (
+                <div className="text-xs mt-0.5" style={{ color: "#64748B" }}>{g.description}</div>
+              )}
+              <div className="text-xs mt-1" style={{ color: "#94A3B8" }}>
+                {g.member_count} member{g.member_count !== 1 ? "s" : ""}
+              </div>
+            </div>
+            <button
+              onClick={() => {
+                setUploadTargetGroup(g.id);
+                fileInputRef.current?.click();
+              }}
+              className="text-xs px-3 py-1.5 rounded-md font-medium"
+              style={{ border: "1px solid #E2E8F0", color: "#334155" }}
+            >
+              Upload CSV
+            </button>
+          </div>
+        ))}
+      </div>
+
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".csv,.txt"
+        onChange={handleFileChosen}
+        style={{ display: "none" }}
+      />
+
+      {/* Create group dialog */}
+      {showCreateDialog && (
+        <div
+          style={{
+            position: "fixed", inset: 0, background: "rgba(15,23,42,0.5)",
+            display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100,
+          }}
+        >
+          <div className="rounded-lg p-6 max-w-md w-full" style={{ background: "#fff" }}>
+            <h3 className="font-semibold mb-4" style={{ color: "#0F172A" }}>Create Group</h3>
+            <input
+              value={newGroupName}
+              onChange={(e) => setNewGroupName(e.target.value)}
+              placeholder="e.g. O-Level Students"
+              className="w-full px-3 py-2 text-sm rounded-md mb-3"
+              style={{ border: "1px solid #E2E8F0" }}
+            />
+            <textarea
+              value={newGroupDesc}
+              onChange={(e) => setNewGroupDesc(e.target.value)}
+              placeholder="Description (optional)"
+              rows={2}
+              className="w-full px-3 py-2 text-sm rounded-md mb-4"
+              style={{ border: "1px solid #E2E8F0" }}
+            />
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setShowCreateDialog(false)}
+                className="px-4 py-2 rounded-md text-sm"
+                style={{ border: "1px solid #E2E8F0" }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleCreateGroup}
+                disabled={creating || !newGroupName.trim()}
+                className="px-4 py-2 rounded-md text-sm font-medium text-white"
+                style={{ background: creating || !newGroupName.trim() ? "#CBD5E1" : "#2563EB" }}
+              >
+                {creating ? "Creating…" : "Create"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Upload preview dialog */}
+      {pendingUploadResult && (
+        <div
+          style={{
+            position: "fixed", inset: 0, background: "rgba(15,23,42,0.5)",
+            display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100,
+          }}
+        >
+          <div className="rounded-lg p-6 max-w-md w-full" style={{ background: "#fff" }}>
+            <h3 className="font-semibold mb-4" style={{ color: "#0F172A" }}>Confirm Upload</h3>
+            <div className="grid grid-cols-3 gap-3 mb-4 text-sm">
+              <div>
+                <div style={{ color: "#64748B" }}>Matched</div>
+                <div className="font-semibold" style={{ color: "#16A34A" }}>{pendingUploadResult.result.matched}</div>
+              </div>
+              <div>
+                <div style={{ color: "#64748B" }}>Not found</div>
+                <div className="font-semibold" style={{ color: "#DC2626" }}>{pendingUploadResult.result.not_found}</div>
+              </div>
+              <div>
+                <div style={{ color: "#64748B" }}>Already in group</div>
+                <div className="font-semibold" style={{ color: "#64748B" }}>{pendingUploadResult.result.already_member}</div>
+              </div>
+            </div>
+            <p className="text-xs mb-4" style={{ color: "#64748B" }}>
+              Only phones already in your Contacts list can be added. Upload new contacts first if needed.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setPendingUploadResult(null)}
+                className="px-4 py-2 rounded-md text-sm"
+                style={{ border: "1px solid #E2E8F0" }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmUpload}
+                disabled={uploading || pendingUploadResult.result.matched === 0}
+                className="px-4 py-2 rounded-md text-sm font-medium text-white"
+                style={{ background: uploading ? "#CBD5E1" : "#2563EB" }}
+              >
+                {uploading ? "Adding…" : `Add ${pendingUploadResult.result.matched} to group`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function ContactsScreen() {
   const toast = useToast();
@@ -1037,6 +1293,7 @@ function ContactsScreen() {
   const [page, setPage] = useState(1);
   const [uploadMode, setUploadMode] = useState<"file" | "paste">("file");
   const [pastedText, setPastedText] = useState("");
+  const [activeTab, setActiveTab] = useState<"contacts" | "groups">("contacts");
   const [pendingPreview, setPendingPreview] = useState<{
     file: File;
     branchId: string;
@@ -1168,29 +1425,63 @@ function ContactsScreen() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-semibold" style={{ color: "#0F172A" }}>
-            Contacts
+            Contacts & Groups
           </h1>
           <p className="text-sm mt-1" style={{ color: "#64748B" }}>
-            {countData !== null
-              ? `${countData.toLocaleString()} total contacts`
-              : "Loading count…"}
+            Manage your audiences
           </p>
         </div>
-        <div>
-          <button
-            onClick={() => setShowUploadDialog(true)}
-            disabled={branches.length === 0}
-            className="px-4 py-2 rounded-md text-sm font-medium text-white flex items-center gap-2"
-            style={{
-              background: branches.length === 0 ? "#CBD5E1" : "#2563EB",
-              cursor: branches.length === 0 ? "not-allowed" : "pointer",
-            }}
-          >
-            <Upload size={16} />
-            Import Contacts
-          </button>
-        </div>
       </div>
+
+      {/* Tab switcher */}
+      <div className="flex gap-1 mb-4" style={{ borderBottom: "1px solid #E2E8F0" }}>
+        <button
+          onClick={() => setActiveTab("contacts")}
+          className="px-4 py-2 text-sm font-medium"
+          style={{
+            color: activeTab === "contacts" ? "#2563EB" : "#64748B",
+            borderBottom: activeTab === "contacts" ? "2px solid #2563EB" : "2px solid transparent",
+            marginBottom: -1,
+          }}
+        >
+          Contacts
+        </button>
+        <button
+          onClick={() => setActiveTab("groups")}
+          className="px-4 py-2 text-sm font-medium"
+          style={{
+            color: activeTab === "groups" ? "#2563EB" : "#64748B",
+            borderBottom: activeTab === "groups" ? "2px solid #2563EB" : "2px solid transparent",
+            marginBottom: -1,
+          }}
+        >
+          Groups
+        </button>
+      </div>
+
+      {activeTab === "groups" ? (
+        <GroupsPanel />
+      ) : (
+        <>
+          <div className="flex items-center justify-between mb-4">
+            <p className="text-sm" style={{ color: "#64748B" }}>
+              {countData !== null
+                ? `${countData.toLocaleString()} total contacts`
+                : "Loading count…"}
+            </p>
+            <button
+              onClick={() => setShowUploadDialog(true)}
+              disabled={branches.length === 0}
+              className="px-4 py-2 rounded-md text-sm font-medium text-white flex items-center gap-2"
+              style={{
+                background: branches.length === 0 ? "#CBD5E1" : "#2563EB",
+                cursor: branches.length === 0 ? "not-allowed" : "pointer",
+              }}
+            >
+              <Upload size={16} />
+              Import Contacts
+            </button>
+          </div>
 
       {/* Filters */}
       <div className="flex gap-3 mb-4">
@@ -1695,6 +1986,8 @@ function ContactsScreen() {
             </div>
           </div>
         </div>
+      )}
+      </>
       )}
     </div>
   );

@@ -173,7 +173,36 @@ export interface UploadResponse {
   errors: UploadError[];
   committed: boolean;
 }
+// ─── Groups ──────────────────────────────────────────────────────────────────
 
+export interface GroupRow {
+  id: string;
+  name: string;
+  description: string | null;
+  member_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface GroupsListResponse {
+  data: GroupRow[];
+}
+
+export interface GroupUploadError {
+  row: number;
+  phone_raw?: string | null;
+  reason: string;
+}
+
+export interface GroupUploadResponse {
+  group_id: string;
+  total_rows: number;
+  matched: number;
+  not_found: number;
+  already_member: number;
+  errors: GroupUploadError[];
+  committed: boolean;
+}
 // ─── Templates ──────────────────────────────────────────────────────────────
 
 export interface TemplateVariableDef {
@@ -240,7 +269,7 @@ export interface BroadcastCreatePayload {
   phone_number_id: string;
   template_id: string;
   variable_mappings: Record<string, string>;  // key is variable NAME, e.g. "one","two"
-  audience_type: "all_contacts" | "branch_group" | "csv_upload";
+  audience_type: "all_contacts" | "branch_group" | "csv_upload" | "group";
   audience_config: Record<string, unknown>;   // {} for all_contacts and branch_group
   lane?: "transactional" | "bulk";            // default bulk
   schedule?: "immediate" | "scheduled";       // default immediate
@@ -296,6 +325,46 @@ export const api = {
 
   contactsCount: (token: string, tenantId: string) =>
     request<{ count: number }>("/contacts/count", { token, tenantId }),
+
+  groups: (token: string, tenantId: string) =>
+    request<GroupsListResponse>("/groups", { token, tenantId }),
+
+  createGroup: (
+    token: string,
+    tenantId: string,
+    payload: { name: string; description?: string | null },
+  ) =>
+    request<GroupRow>("/groups", {
+      method: "POST",
+      token,
+      tenantId,
+      body: payload,
+    }),
+
+  uploadToGroup: async (
+    token: string,
+    tenantId: string,
+    opts: { groupId: string; file: File; commit: boolean },
+  ): Promise<GroupUploadResponse> => {
+    const fd = new FormData();
+    fd.append("file", opts.file);
+    const url = `${API_URL}/groups/${opts.groupId}/upload${qs({ commit: opts.commit })}`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "X-Tenant-Id": tenantId },
+      body: fd,
+    });
+    if (!res.ok) {
+      let detail = res.statusText || "Upload failed";
+      let bodyJson: unknown;
+      try {
+        bodyJson = await res.json();
+        detail = (bodyJson as { detail?: string }).detail || detail;
+      } catch { /* ignore */ }
+      throw new ApiError(res.status, detail, bodyJson);
+    }
+    return res.json();
+  },
 
   uploadContacts: async (
     token: string,

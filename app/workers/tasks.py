@@ -38,6 +38,7 @@ from app.models import (
     CampaignRecipient,
     CampaignStatus,
     Contact,
+    ContactGroupMember,
     ContactOptInStatus,
     PhoneNumber,
     RecipientStatus,
@@ -608,6 +609,18 @@ async def materialize_campaign_task(
             except (ValueError, TypeError):
                 return {"success": False, "reason": "invalid_upload_id"}
             stmt = stmt.where(Contact.csv_import_id == upload_uuid)
+        elif audience_type == AudienceType.group:
+            group_id_raw = audience_config.get("group_id")
+            if not group_id_raw:
+                logger.error("materialize: group audience missing audience_config.group_id")
+                return {"success": False, "reason": "missing_group_id"}
+            try:
+                group_uuid = uuid.UUID(group_id_raw)
+            except (ValueError, TypeError):
+                return {"success": False, "reason": "invalid_group_id"}
+            stmt = stmt.join(
+                ContactGroupMember, ContactGroupMember.contact_id == Contact.id
+            ).where(ContactGroupMember.group_id == group_uuid)    
         else:
             return {"success": False, "reason": "unknown_audience_type"}
 

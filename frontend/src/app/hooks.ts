@@ -22,6 +22,10 @@ import {
   type BroadcastCreatePayload,
   type BroadcastDetail,
   type SendResponse,
+  type GroupRow,
+  type GroupsListResponse,
+  type GroupUploadResponse,
+
 } from "../api";
 import { useAuth } from "../auth";
 
@@ -489,4 +493,104 @@ export function useCancelBroadcast(): {
   };
 
   return { cancel, canceling, error };
+}
+
+// ─── useGroups ───────────────────────────────────────────────────────────────
+
+export function useGroups(): {
+  groups: GroupRow[];
+  loading: boolean;
+  error: string | null;
+  refresh: () => void;
+} {
+  const { session, activeTenantId } = useAuth();
+  const [groups, setGroups] = useState<GroupRow[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [tick, setTick] = useState(0);
+
+  useEffect(() => {
+    if (!session || !activeTenantId) return;
+    let cancelled = false;
+    setLoading(true);
+    api
+      .groups(session.access_token, activeTenantId)
+      .then((res) => {
+        if (!cancelled) {
+          setGroups(res.data);
+          setError(null);
+        }
+      })
+      .catch((e) => {
+        if (!cancelled) setError((e as Error).message ?? String(e));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.access_token, activeTenantId, tick]);
+
+  return { groups, loading, error, refresh: () => setTick((t) => t + 1) };
+}
+
+// ─── useCreateGroup ──────────────────────────────────────────────────────────
+
+export function useCreateGroup(): {
+  create: (name: string, description?: string) => Promise<GroupRow>;
+  creating: boolean;
+  error: string | null;
+} {
+  const { session, activeTenantId } = useAuth();
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const create = async (name: string, description?: string) => {
+    if (!session || !activeTenantId)
+      throw new Error("Not authenticated or no tenant selected");
+    setCreating(true);
+    setError(null);
+    try {
+      return await api.createGroup(session.access_token, activeTenantId, { name, description });
+    } catch (e) {
+      const msg = (e as Error).message ?? String(e);
+      setError(msg);
+      throw e;
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  return { create, creating, error };
+}
+
+// ─── useUploadToGroup ────────────────────────────────────────────────────────
+
+export function useUploadToGroup(): {
+  upload: (groupId: string, file: File, commit: boolean) => Promise<GroupUploadResponse>;
+  uploading: boolean;
+  error: string | null;
+} {
+  const { session, activeTenantId } = useAuth();
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const upload = async (groupId: string, file: File, commit: boolean) => {
+    if (!session || !activeTenantId)
+      throw new Error("Not authenticated or no tenant selected");
+    setUploading(true);
+    setError(null);
+    try {
+      return await api.uploadToGroup(session.access_token, activeTenantId, { groupId, file, commit });
+    } catch (e) {
+      const msg = (e as Error).message ?? String(e);
+      setError(msg);
+      throw e;
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  return { upload, uploading, error };
 }

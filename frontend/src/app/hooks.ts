@@ -341,6 +341,8 @@ export function usePhoneNumbers(): {
 
 // ─── useBroadcasts ───────────────────────────────────────────────────────────
 
+const BROADCASTS_POLL_INTERVAL_MS = 8_000;
+
 export function useBroadcasts(params?: {
   page?: number;
   page_size?: number;
@@ -361,24 +363,33 @@ export function useBroadcasts(params?: {
 
   useEffect(() => {
     if (!session || !activeTenantId) return;
+
     let cancelled = false;
-    setLoading(true);
-    api
-      .broadcasts(session.access_token, activeTenantId, JSON.parse(key))
-      .then((res) => {
+    let intervalId: number | undefined;
+
+    const fetchOnce = async (isInitial: boolean) => {
+      if (isInitial) setLoading(true);
+      try {
+        const res = await api.broadcasts(
+          session.access_token, activeTenantId, JSON.parse(key),
+        );
         if (!cancelled) {
           setData(res);
           setError(null);
         }
-      })
-      .catch((e) => {
+      } catch (e) {
         if (!cancelled) setError((e as Error).message ?? String(e));
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+      } finally {
+        if (!cancelled && isInitial) setLoading(false);
+      }
+    };
+
+    fetchOnce(true);
+    intervalId = window.setInterval(() => fetchOnce(false), BROADCASTS_POLL_INTERVAL_MS);
+
     return () => {
       cancelled = true;
+      if (intervalId !== undefined) window.clearInterval(intervalId);
     };
   }, [session?.access_token, activeTenantId, key, tick]);
 

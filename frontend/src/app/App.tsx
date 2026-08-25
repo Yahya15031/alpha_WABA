@@ -1985,7 +1985,32 @@ function LogsScreen() {
 
 export default function App() {
   const { session, me, loading } = useAuth();
-  const [screen, setScreen] = useState("dashboard");
+  // Map screen names to URL paths and back — keeps refresh/back-button sane.
+const VALID_SCREENS = ["dashboard", "contacts", "broadcasts", "templates"] as const;
+type ScreenName = typeof VALID_SCREENS[number];
+
+function screenFromPath(): ScreenName {
+  const path = window.location.pathname.slice(1); // strip leading '/'
+  return (VALID_SCREENS as readonly string[]).includes(path)
+    ? (path as ScreenName)
+    : "dashboard";
+}
+
+// ... inside the App component ...
+const [screen, setScreenRaw] = useState<ScreenName>(screenFromPath());
+
+const setScreen = (next: ScreenName) => {
+  setScreenRaw(next);
+  const path = next === "dashboard" ? "/" : `/${next}`;
+  window.history.pushState({}, "", path);
+};
+
+// Handle browser back/forward buttons
+useEffect(() => {
+  const onPopState = () => setScreenRaw(screenFromPath());
+  window.addEventListener("popstate", onPopState);
+  return () => window.removeEventListener("popstate", onPopState);
+}, []);
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   // Auth gate — everything below assumes an authenticated session + /me

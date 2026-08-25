@@ -1986,7 +1986,7 @@ function LogsScreen() {
 export default function App() {
   const { session, me, loading } = useAuth();
   // Map screen names to URL paths and back — keeps refresh/back-button sane.
-const VALID_SCREENS = ["dashboard", "contacts", "broadcasts", "templates"] as const;
+const VALID_SCREENS = ["dashboard", "contacts", "campaign", "templates","logs"] as const;
 type ScreenName = typeof VALID_SCREENS[number];
 
 function screenFromPath(): ScreenName {

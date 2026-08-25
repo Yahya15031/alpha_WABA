@@ -130,11 +130,11 @@ class CsvImportStatus(str, Enum):
     completed = "completed"
     failed = "failed"
 
-
 class AudienceType(str, Enum):
     all_contacts = "all_contacts"
     branch_group = "branch_group"
     csv_upload = "csv_upload"
+    group = "group"          # NEW
 
 
 class CampaignLane(str, Enum):
@@ -367,6 +367,34 @@ class Template(Base):
     updated_at: Mapped[datetime] = _updated_at()
 
 
+class ContactGroup(Base):
+    __tablename__ = "contact_groups"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "name", name="contact_groups_unique_name_per_tenant"),
+    )
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = _created_at()
+    updated_at: Mapped[datetime] = _updated_at()
+
+
+class ContactGroupMember(Base):
+    __tablename__ = "contact_group_members"
+
+    group_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("contact_groups.id", ondelete="CASCADE"), primary_key=True
+    )
+    contact_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("contacts.id", ondelete="CASCADE"), primary_key=True
+    )
+    added_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
 class Contact(Base):
     __tablename__ = "contacts"
     __table_args__ = (

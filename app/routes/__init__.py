@@ -14,6 +14,7 @@ from app.routes.settings import router as settings_router
 from app.routes.system import router as system_router
 from app.routes.templates import router as templates_router
 from app.routes.phone_numbers import router as phone_numbers_router
+from app.routes.groups import router as groups_router
 
 router = APIRouter()
 router.include_router(auth_router)
@@ -25,3 +26,4 @@ router.include_router(dashboard_router)
 router.include_router(messages_router)
 router.include_router(settings_router)
 router.include_router(system_router)
+router.include_router(groups_router)

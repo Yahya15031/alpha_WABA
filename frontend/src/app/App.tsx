@@ -118,6 +118,20 @@ function BroadcastCreateForm({ onDone, onCancel }: { onDone: () => void; onCance
             className="w-full px-3 py-2 text-sm rounded-md outline-none"
             style={{ border: "1px solid #E2E8F0", background: "#fff" }}
           />
+          <div>
+          <label className="text-sm font-medium block mb-1" style={{ color: "#334155" }}>Branch</label>
+          <select
+            value={branchId}
+            onChange={(e) => setBranchId(e.target.value)}
+            className="w-full px-3 py-2 text-sm rounded-md outline-none"
+            style={{ border: "1px solid #E2E8F0", background: "#fff" }}
+          >
+            <option value="">Select a branch</option>
+            {branches.map((b) => (
+              <option key={b.id} value={b.id}>{b.name}</option>
+            ))}
+          </select>
+        </div>
         </div>
 
         <div>
@@ -210,21 +224,6 @@ function BroadcastCreateForm({ onDone, onCancel }: { onDone: () => void; onCance
             </p>
           </div>
         )}
-
-        <div>
-          <label className="text-sm font-medium block mb-1" style={{ color: "#334155" }}>Audience</label>
-          <div className="flex gap-4">
-            <label className="flex items-center gap-2 text-sm" style={{ color: "#334155" }}>
-              <input type="radio" checked={audienceType === "all_contacts"} onChange={() => setAudienceType("all_contacts" as any)} />
-              All contacts in this tenant
-            </label>
-            <label className="flex items-center gap-2 text-sm" style={{ color: "#334155" }}>
-              <input type="radio" checked={audienceType === "branch_group"} onChange={() => setAudienceType("branch_group" as any)} />
-              Only the owning branch
-            </label>
-          </div>
-        </div>
-
         <div className="flex justify-end gap-2 pt-4" style={{ borderTop: "1px solid #E2E8F0" }}>
           <button onClick={onCancel} className="px-4 py-2 rounded-md text-sm" style={{ border: "1px solid #E2E8F0", background: "#fff", color: "#0F172A" }}>
             Cancel

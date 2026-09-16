@@ -25,6 +25,8 @@ import {
   type GroupRow,
   type GroupsListResponse,
   type GroupUploadResponse,
+  type MessagesListResponse,
+  type MessagesKpisResponse,
 
 } from "../api";
 import { useAuth } from "../auth";
@@ -398,6 +400,64 @@ export function useBroadcasts(params?: {
   }, [session?.access_token, activeTenantId, key, tick]);
 
   return { data, loading, error, refresh: () => setTick((t) => t + 1) };
+}
+
+const MESSAGES_POLL_MS = 10_000;
+
+export function useMessages(params?: {
+  page?: number;
+  page_size?: number;
+  status?: string;
+  search?: string;
+}): {
+  data: MessagesListResponse | null;
+  kpis: MessagesKpisResponse | null;
+  loading: boolean;
+  error: string | null;
+  refresh: () => void;
+} {
+  const { session, activeTenantId } = useAuth();
+  const [data, setData] = useState<MessagesListResponse | null>(null);
+  const [kpis, setKpis] = useState<MessagesKpisResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [tick, setTick] = useState(0);
+  const key = JSON.stringify(params ?? {});
+
+  useEffect(() => {
+    if (!session || !activeTenantId) return;
+    let cancelled = false;
+    let intervalId: number | undefined;
+
+    const fetchOnce = async (isInitial: boolean) => {
+      if (isInitial) setLoading(true);
+      try {
+        const [listRes, kpisRes] = await Promise.all([
+          api.messages(session.access_token, activeTenantId, JSON.parse(key)),
+          api.messagesKpis(session.access_token, activeTenantId),
+        ]);
+        if (!cancelled) {
+          setData(listRes);
+          setKpis(kpisRes);
+          setError(null);
+        }
+      } catch (e) {
+        if (!cancelled) setError((e as Error).message ?? String(e));
+      } finally {
+        if (!cancelled && isInitial) setLoading(false);
+      }
+    };
+
+    fetchOnce(true);
+    intervalId = window.setInterval(() => fetchOnce(false), MESSAGES_POLL_MS);
+
+    return () => {
+      cancelled = true;
+      if (intervalId !== undefined) window.clearInterval(intervalId);
+    };
+  }, [session?.access_token, activeTenantId, key, tick]);
+
+  return { data, kpis, loading, error, refresh: () => setTick((t) => t + 1) };
 }
 
 // ─── useCreateBroadcast ──────────────────────────────────────────────────────

@@ -173,6 +173,7 @@ export function LoginScreen() {
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [resetSent, setResetSent] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -184,6 +185,29 @@ export function LoginScreen() {
       setErr((e as Error).message);
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleForgotPassword = async () => {
+    if (!email.trim()) {
+      setErr("Enter your email above first, then click Forgot password.");
+      return;
+    }
+    setErr(null);
+    try {
+      const { error: resetError } = await supabase.auth.resetPasswordForEmail(
+        email.trim(),
+        {
+          redirectTo: `${window.location.origin}/reset-password`,
+        },
+      );
+      if (resetError) {
+        setErr(resetError.message);
+        return;
+      }
+      setResetSent(true);
+    } catch (e) {
+      setErr((e as Error).message ?? "Reset failed");
     }
   };
 
@@ -203,6 +227,13 @@ export function LoginScreen() {
           boxShadow: "0 4px 24px rgba(0,0,0,0.06)",
         }}
       >
+        {resetSent && (
+          <div className="p-3 mb-3 rounded-md text-sm"
+            style={{ background: "#DCFCE7", color: "#166534", border: "1px solid #BBF7D0" }}
+          >
+            Reset link sent to <strong>{email}</strong>. Check your inbox.
+          </div>
+        )}
         <div className="flex items-center gap-2.5 mb-6">
           <div
             className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0"
@@ -310,6 +341,14 @@ export function LoginScreen() {
             }}
           >
             {submitting ? "Signing in…" : "Sign In"}
+          </button>
+          <button
+            type="button"
+            onClick={handleForgotPassword}
+            className="mt-3 text-xs"
+            style={{ color: "#2563EB", background: "none", border: "none", cursor: "pointer" }}
+          >
+            Forgot password?
           </button>
         </div>
       </form>

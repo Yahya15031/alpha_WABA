@@ -27,7 +27,8 @@ import {
   useUploadContacts,
   useGroups,           
   useCreateGroup,      
-  useUploadToGroup     
+  useUploadToGroup,
+  useMessages,
 } from "./hooks";
 import type { CampaignStatusCounts, LatestBroadcast } from "../api";
 import type { UploadResponse } from "../api";
@@ -2257,19 +2258,140 @@ function renderTemplateBody(text: string) {
   );
 }
 
-function LogsScreen() {
+function MessagesScreen() {
+  const [page, setPage] = useState(1);
+  const [statusFilter, setStatusFilter] = useState("");
+  const { data, kpis, loading, error } = useMessages({
+    page, page_size: 50, status: statusFilter || undefined,
+  });
+
+  const statusBadge = (s: string) => {
+    const map: Record<string, { bg: string; fg: string }> = {
+      sent:      { bg: "#DBEAFE", fg: "#1E40AF" },
+      delivered: { bg: "#DCFCE7", fg: "#166534" },
+      read:      { bg: "#D1FAE5", fg: "#065F46" },
+      failed:    { bg: "#FEE2E2", fg: "#991B1B" },
+      pending:   { bg: "#F1F5F9", fg: "#475569" },
+      queued:    { bg: "#FEF3C7", fg: "#92400E" },
+    };
+    const c = map[s] ?? { bg: "#F1F5F9", fg: "#475569" };
+    return (
+      <span className="text-xs px-2 py-0.5 rounded-full font-medium"
+        style={{ background: c.bg, color: c.fg }}>{s}</span>
+    );
+  };
+
+  const rows = data?.data ?? [];
 
   return (
-    <>
-      <MockDataBanner label="Message Logs" />
-      <div className="flex flex-col gap-4 p-4 sm:p-6 lg:p-8">
-        <h1 className="text-xl font-semibold" style={{ color: "#0F172A" }}>Message Logs</h1>
-        <p className="text-sm" style={{ color: "#64748B" }}>
-          Backend endpoints (/messages, /messages/kpis, /queue/status) are live.
-          Wiring is next up.
+    <div className="p-6 max-w-7xl mx-auto">
+      <div className="mb-6">
+        <h1 className="text-2xl font-semibold" style={{ color: "#0F172A" }}>Message Logs</h1>
+        <p className="text-sm mt-1" style={{ color: "#64748B" }}>
+          {data ? `${data.pagination.total.toLocaleString()} messages` : "Loading…"}
         </p>
       </div>
-    </>
+
+      {kpis && (
+        <div className="grid grid-cols-4 gap-3 mb-4">
+          {[
+            { label: "Sent", value: kpis.total_sent, color: "#1E40AF" },
+            { label: "Delivered", value: kpis.total_delivered, color: "#166534" },
+            { label: "Read", value: kpis.total_read, color: "#065F46" },
+            { label: "Failed", value: kpis.total_failed, color: "#991B1B" },
+          ].map((k) => (
+            <div key={k.label} className="p-4 rounded-lg"
+              style={{ background: "#fff", border: "1px solid #E2E8F0" }}>
+              <div className="text-xs uppercase font-medium" style={{ color: "#94A3B8" }}>{k.label}</div>
+              <div className="text-2xl font-semibold mt-1" style={{ color: k.color }}>
+                {k.value.toLocaleString()}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="flex gap-2 mb-3">
+        <select
+          value={statusFilter}
+          onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}
+          className="px-3 py-2 text-sm rounded-md outline-none"
+          style={{ border: "1px solid #E2E8F0", background: "#fff" }}
+        >
+          <option value="">All statuses</option>
+          <option value="sent">Sent</option>
+          <option value="delivered">Delivered</option>
+          <option value="read">Read</option>
+          <option value="failed">Failed</option>
+          <option value="queued">Queued</option>
+          <option value="pending">Pending</option>
+        </select>
+      </div>
+
+      <div className="rounded-lg overflow-hidden" style={{ border: "1px solid #E2E8F0", background: "#fff" }}>
+        {error && <div className="p-4 text-sm" style={{ color: "#B91C1C" }}>Failed to load: {error}</div>}
+        {loading && !data && <div className="p-8 text-center text-sm" style={{ color: "#64748B" }}>Loading…</div>}
+        {!loading && rows.length === 0 && !error && (
+          <div className="p-8 text-center text-sm" style={{ color: "#64748B" }}>No messages match.</div>
+        )}
+        {rows.length > 0 && (
+          <table className="w-full text-sm">
+            <thead style={{ background: "#F8FAFC" }}>
+              <tr>
+                <th className="text-left px-4 py-2 font-medium" style={{ color: "#475569" }}>Recipient</th>
+                <th className="text-left px-4 py-2 font-medium" style={{ color: "#475569" }}>Campaign</th>
+                <th className="text-left px-4 py-2 font-medium" style={{ color: "#475569" }}>Template</th>
+                <th className="text-left px-4 py-2 font-medium" style={{ color: "#475569" }}>Status</th>
+                <th className="text-left px-4 py-2 font-medium" style={{ color: "#475569" }}>Sent</th>
+                <th className="text-left px-4 py-2 font-medium" style={{ color: "#475569" }}>Delivered</th>
+                <th className="text-left px-4 py-2 font-medium" style={{ color: "#475569" }}>Error</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((m) => (
+                <tr key={m.id} style={{ borderTop: "1px solid #F1F5F9" }}>
+                  <td className="px-4 py-2" style={{ color: "#0F172A" }}>
+                    <div>{m.contact_name ?? "—"}</div>
+                    <div className="text-xs font-mono" style={{ color: "#94A3B8" }}>{m.phone_e164}</div>
+                  </td>
+                  <td className="px-4 py-2" style={{ color: "#475569" }}>{m.campaign_name ?? "—"}</td>
+                  <td className="px-4 py-2 font-mono text-xs" style={{ color: "#334155" }}>{m.template_name ?? "—"}</td>
+                  <td className="px-4 py-2">{statusBadge(m.status)}</td>
+                  <td className="px-4 py-2 text-xs" style={{ color: "#64748B" }}>
+                    {m.sent_at ? new Date(m.sent_at).toLocaleString() : "—"}
+                  </td>
+                  <td className="px-4 py-2 text-xs" style={{ color: "#64748B" }}>
+                    {m.delivered_at ? new Date(m.delivered_at).toLocaleString() : "—"}
+                  </td>
+                  <td className="px-4 py-2 text-xs" style={{ color: "#B91C1C" }}>
+                    {m.error_code ? `${m.error_code}: ${m.error_message ?? ""}` : ""}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {data && data.pagination.total > 50 && (
+        <div className="flex justify-between mt-4 text-sm">
+          <button disabled={page === 1} onClick={() => setPage((p) => Math.max(1, p - 1))}
+            className="px-3 py-1 rounded-md" style={{ border: "1px solid #E2E8F0", background: page === 1 ? "#F8FAFC" : "#fff" }}>
+            ← Previous
+          </button>
+          <span style={{ color: "#64748B" }}>
+            Page {page} of {Math.ceil(data.pagination.total / 50)}
+          </span>
+          <button
+            disabled={page * 50 >= data.pagination.total}
+            onClick={() => setPage((p) => p + 1)}
+            className="px-3 py-1 rounded-md"
+            style={{ border: "1px solid #E2E8F0", background: page * 50 >= data.pagination.total ? "#F8FAFC" : "#fff" }}>
+            Next →
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -2353,7 +2475,7 @@ useEffect(() => {
                     {screen === "dashboard" && <DashboardScreen />}
           {screen === "contacts"  && <ContactsScreen />}
           {screen === "campaign"  && <BroadcastsScreen />}
-          {screen === "logs"      && <LogsScreen />}
+          {screen === "logs"      && <MessagesScreen />}
           {screen === "templates" && <TemplatesScreen />}
 
         </main>

@@ -358,6 +358,7 @@ async def list_contacts(
     search: str | None = Query(None, description="Match phone_e164 or full_name substring"),
     branch_id: str | None = Query(None),
     segment: str | None = Query(None),
+    include_archived: bool = Query(False, description="Include archived contacts in results"),
     page: int = Query(1, ge=1),
     page_size: int = Query(25, ge=1, le=100),
     _: TenantContext = Depends(get_active_tenant_context),
@@ -379,6 +380,10 @@ async def list_contacts(
             raise HTTPException(status_code=422, detail="branch_id must be a UUID")
     if segment:
         stmt = stmt.where(Contact.custom_fields["segment"].astext == segment)
+
+    # Exclude archived contacts by default; allow opt-in via query.
+    if not include_archived:
+        stmt = stmt.where(Contact.is_archived == False)
 
     # Total count for pagination
     count_stmt = select(func.count()).select_from(stmt.subquery())
@@ -424,3 +429,81 @@ async def contacts_count(
     """Count of contacts for the active tenant — feeds the KPI card."""
     result = await session.execute(select(func.count(Contact.id)))
     return CountResponse(count=result.scalar_one())
+
+
+# ---------------------------------------------------------------------------
+# PATCH /contacts/{contact_id}
+# ---------------------------------------------------------------------------
+
+
+class ContactUpdateRequest(BaseModel):
+    full_name: str | None = None
+    opt_in_status: ContactOptInStatus | None = None
+    custom_fields: dict[str, Any] | None = None
+
+
+@router.patch("/{contact_id}", response_model=ContactRow)
+async def update_contact(
+    contact_id: str,
+    body: ContactUpdateRequest,
+    _: TenantContext = Depends(get_active_tenant_context),
+    session: AsyncSession = Depends(get_tenant_scoped_session),
+) -> ContactRow:
+    try:
+        contact_uuid = uuid.UUID(contact_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="contact_id must be a UUID")
+
+    contact = await session.get(Contact, contact_uuid)
+    if contact is None:
+        raise HTTPException(status_code=404, detail="Contact not found")
+
+    # Only apply fields the caller actually set — partial update semantics
+    update_data = body.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(contact, field, value)
+
+    await session.flush()
+    await session.refresh(contact)
+
+    branch_name = None
+    if contact.branch_id:
+        branch = await session.get(Branch, contact.branch_id)
+        branch_name = branch.name if branch else None
+
+    return ContactRow(
+        id=str(contact.id),
+        phone_e164=contact.phone_e164,
+        full_name=contact.full_name,
+        branch_id=str(contact.branch_id) if contact.branch_id else None,
+        branch_name=branch_name,
+        opt_in_status=contact.opt_in_status.value,
+        source=contact.source.value,
+        created_at=contact.created_at.isoformat(),
+    )
+
+
+# ---------------------------------------------------------------------------
+# DELETE (archive) /contacts/{contact_id}
+# ---------------------------------------------------------------------------
+
+
+@router.delete("/{contact_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def archive_contact(
+    contact_id: str,
+    _: TenantContext = Depends(get_active_tenant_context),
+    session: AsyncSession = Depends(get_tenant_scoped_session),
+) -> None:
+    """Soft-delete: mark contact as archived. Preserves campaign history."""
+    try:
+        contact_uuid = uuid.UUID(contact_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="contact_id must be a UUID")
+
+    contact = await session.get(Contact, contact_uuid)
+    if contact is None:
+        raise HTTPException(status_code=404, detail="Contact not found")
+
+    contact.is_archived = True
+    await session.flush()
+

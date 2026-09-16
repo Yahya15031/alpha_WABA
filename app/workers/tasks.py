@@ -589,7 +589,8 @@ async def materialize_campaign_task(
 
         # ---- Resolve audience ----
         stmt = select(Contact).where(
-            Contact.opt_in_status == ContactOptInStatus.opted_in
+            Contact.opt_in_status == ContactOptInStatus.opted_in,
+            Contact.is_archived == False,
         )
         if audience_type == AudienceType.all_contacts:
             stmt = stmt.where(Contact.branch_id == branch_id)

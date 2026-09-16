@@ -149,6 +149,37 @@ export interface ContactsListParams {
   page_size?: number;
 }
 
+// ─── Messages ────────────────────────────────────────────────────────────────
+
+export interface MessageRow {
+  id: string;
+  phone_e164: string;
+  contact_name: string | null;
+  template_name: string | null;
+  campaign_name: string | null;
+  status: string;
+  error_code: number | null;
+  error_message: string | null;
+  meta_message_id: string | null;
+  sent_at: string | null;
+  delivered_at: string | null;
+  read_at: string | null;
+  failed_at: string | null;
+  created_at: string;
+}
+
+export interface MessagesListResponse {
+  data: MessageRow[];
+  pagination: { page: number; page_size: number; total: number };
+}
+
+export interface MessagesKpisResponse {
+  total_sent: number;
+  total_delivered: number;
+  total_read: number;
+  total_failed: number;
+}
+
 export interface UploadPreviewRow {
   row: number;
   phone_e164: string;
@@ -325,6 +356,16 @@ export const api = {
 
   contactsCount: (token: string, tenantId: string) =>
     request<{ count: number }>("/contacts/count", { token, tenantId }),
+
+  messages: (
+    token: string,
+    tenantId: string,
+    params?: { page?: number; page_size?: number; status?: string; search?: string },
+  ) =>
+    request<MessagesListResponse>(`/messages${qs(params)}`, { token, tenantId }),
+
+  messagesKpis: (token: string, tenantId: string) =>
+    request<MessagesKpisResponse>("/messages/kpis", { token, tenantId }),
 
   groups: (token: string, tenantId: string) =>
     request<GroupsListResponse>("/groups", { token, tenantId }),

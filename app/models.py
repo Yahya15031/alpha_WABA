@@ -425,6 +425,9 @@ class Contact(Base):
         nullable=False,
         server_default=ContactSource.manual.value,
     )
+    is_archived: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
     csv_import_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("csv_imports.id", ondelete="SET NULL")
     )

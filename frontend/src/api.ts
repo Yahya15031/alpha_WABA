@@ -8,8 +8,11 @@
 const API_URL: string = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
 export class ApiError extends Error {
-  constructor(public status: number, public detail: string) {
+  public body?: unknown;
+
+  constructor(public status: number, public detail: string, body?: unknown) {
     super(detail);
+    this.body = body;
   }
 }
 
@@ -52,7 +55,7 @@ async function request<T>(path: string, opts: RequestOptions): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-function qs(params?: Record<string, unknown>): string {
+function qs<T extends object>(params?: T): string {
   if (!params) return "";
   const s = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {
@@ -125,15 +128,23 @@ export interface DashboardFilters {
   end_date?: string;
 }
 
-export interface Contact {
+export interface ContactRow {
   id: string;
   phone_e164: string;
   full_name: string | null;
   branch_id: string | null;
   branch_name: string | null;
-  opt_in_status: string;
+  opt_in_status: "opted_in" | "opted_out" | "pending" | string;
   source: string;
   created_at: string;
+}
+
+export type Contact = ContactRow;
+
+export interface ContactUpdatePayload {
+  full_name?: string | null;
+  opt_in_status?: "opted_in" | "opted_out" | "pending";
+  custom_fields?: Record<string, unknown>;
 }
 
 export interface ContactsListResponse {
@@ -153,19 +164,20 @@ export interface ContactsListParams {
 
 export interface MessageRow {
   id: string;
+  campaign_id: string;
+  campaign_name: string;
   phone_e164: string;
-  contact_name: string | null;
-  template_name: string | null;
-  campaign_name: string | null;
-  status: string;
-  error_code: number | null;
-  error_message: string | null;
   meta_message_id: string | null;
+  branch_name: string;
+  status: string;
+  queued_at: string | null;
   sent_at: string | null;
   delivered_at: string | null;
   read_at: string | null;
   failed_at: string | null;
-  created_at: string;
+  latency_ms: number | null;
+  error_code: number | null;
+  error_message: string | null;
 }
 
 export interface MessagesListResponse {
@@ -356,6 +368,21 @@ export const api = {
 
   contactsCount: (token: string, tenantId: string) =>
     request<{ count: number }>("/contacts/count", { token, tenantId }),
+
+  updateContact: (token: string, tenantId: string, contactId: string, payload: ContactUpdatePayload) =>
+    request<ContactRow>(`/contacts/${contactId}`, {
+      method: "PATCH",
+      token,
+      tenantId,
+      body: payload,
+    }),
+
+  archiveContact: (token: string, tenantId: string, contactId: string) =>
+    request<void>(`/contacts/${contactId}`, {
+      method: "DELETE",
+      token,
+      tenantId,
+    }),
 
   messages: (
     token: string,

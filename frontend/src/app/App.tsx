@@ -15,6 +15,7 @@ import { ToastProvider, useToast } from "./Toast";
 import { FullPageLoader, LoginScreen, useAuth } from "../auth";
 import { ResetPasswordPage } from "./ResetPasswordPage";
 import {
+  useArchiveContact,
   useBranches,
   useBroadcasts,
   useContacts,
@@ -25,14 +26,20 @@ import {
   useSendBroadcast,
   useCancelBroadcast,
   useTemplates,
+  useUpdateContact,
   useUploadContacts,
-  useGroups,           
-  useCreateGroup,      
+  useGroups,
+  useCreateGroup,
   useUploadToGroup,
   useMessages,
 } from "./hooks";
-import type { CampaignStatusCounts, LatestBroadcast } from "../api";
-import type { UploadResponse } from "../api";
+import type {
+  CampaignStatusCounts,
+  ContactRow,
+  GroupUploadResponse,
+  LatestBroadcast,
+  UploadResponse,
+} from "../api";
 function BroadcastCreateForm({ onDone, onCancel }: { onDone: () => void; onCancel: () => void }) {
   const toast = useToast();
   const [name, setName] = useState("");
@@ -1293,6 +1300,11 @@ function ContactsScreen() {
   const [branchFilter, setBranchFilter] = useState<string>("");
   const [page, setPage] = useState(1);
   const [uploadMode, setUploadMode] = useState<"file" | "paste">("file");
+  const { update: updateContact, updating } = useUpdateContact();
+  const { archive: archiveContact, archiving } = useArchiveContact();
+  const [editingContact, setEditingContact] = useState<ContactRow | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editOptIn, setEditOptIn] = useState<"opted_in" | "opted_out" | "pending">("opted_in");
   const [pastedText, setPastedText] = useState("");
   const [activeTab, setActiveTab] = useState<"contacts" | "groups">("contacts");
   const [pendingPreview, setPendingPreview] = useState<{
@@ -1330,6 +1342,50 @@ function ContactsScreen() {
 
   const { data, loading, error, refresh } = useContacts(contactsParams);
   const { upload, uploading } = useUploadContacts();
+
+  const startEdit = (c: ContactRow) => {
+    setEditingContact(c);
+    setEditName(c.full_name ?? "");
+    setEditOptIn(c.opt_in_status as "opted_in" | "opted_out" | "pending");
+  };
+
+  const submitEdit = async () => {
+    if (!editingContact) return;
+    try {
+      await updateContact(editingContact.id, {
+        full_name: editName.trim() || null,
+        opt_in_status: editOptIn,
+      });
+      toast.push({ variant: "success", message: "Contact updated." });
+      setEditingContact(null);
+      refresh();
+    } catch (err) {
+      const e = err as Error & { status?: number; body?: unknown };
+      toast.push({
+        variant: "error",
+        message: "Failed to update contact",
+        detail: e.body ? JSON.stringify(e.body) : e.message,
+        status: e.status,
+      });
+    }
+  };
+
+  const handleArchive = async (c: ContactRow) => {
+    if (!confirm(`Archive ${c.full_name ?? c.phone_e164}? This preserves campaign history but removes them from future sends.`)) return;
+    try {
+      await archiveContact(c.id);
+      toast.push({ variant: "success", message: "Contact archived." });
+      refresh();
+    } catch (err) {
+      const e = err as Error & { status?: number; body?: unknown };
+      toast.push({
+        variant: "error",
+        message: "Failed to archive contact",
+        detail: e.body ? JSON.stringify(e.body) : e.message,
+        status: e.status,
+      });
+    }
+  };
 
   // Debounce search (300ms) so we don't fire a request every keystroke.
   useEffect(() => {
@@ -1577,6 +1633,7 @@ function ContactsScreen() {
                 <th className="text-left px-4 py-2 font-medium" style={{ color: "#475569" }}>Opt-in</th>
                 <th className="text-left px-4 py-2 font-medium" style={{ color: "#475569" }}>Source</th>
                 <th className="text-left px-4 py-2 font-medium" style={{ color: "#475569" }}>Added</th>
+                <th className="text-left px-4 py-2 font-medium" style={{ color: "#475569" }}>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -1599,6 +1656,25 @@ function ContactsScreen() {
                   </td>
                   <td className="px-4 py-2" style={{ color: "#64748B" }}>
                     {new Date(c.created_at).toLocaleDateString()}
+                  </td>
+                  <td className="px-4 py-2">
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => startEdit(c)}
+                        className="text-xs px-2 py-1 rounded-md"
+                        style={{ border: "1px solid #E2E8F0", color: "#334155" }}
+                      >
+                        Edit
+                      </button>
+                      <button
+                        onClick={() => handleArchive(c)}
+                        disabled={archiving}
+                        className="text-xs px-2 py-1 rounded-md"
+                        style={{ border: "1px solid #FECACA", color: "#B91C1C" }}
+                      >
+                        Archive
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -1988,6 +2064,56 @@ function ContactsScreen() {
           </div>
         </div>
       )}
+      {editingContact && (
+        <div style={{
+          position: "fixed", inset: 0, background: "rgba(15,23,42,0.5)",
+          display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100,
+        }}>
+          <div className="rounded-lg p-6 max-w-md w-full" style={{ background: "#fff" }}>
+            <h3 className="font-semibold mb-4" style={{ color: "#0F172A" }}>Edit Contact</h3>
+            <p className="text-xs mb-3 font-mono" style={{ color: "#64748B" }}>{editingContact.phone_e164}</p>
+
+            <label className="text-xs font-medium block mb-1" style={{ color: "#334155" }}>Full name</label>
+            <input
+              value={editName}
+              onChange={(e) => setEditName(e.target.value)}
+              placeholder="(no name)"
+              className="w-full px-3 py-2 text-sm rounded-md mb-3"
+              style={{ border: "1px solid #E2E8F0" }}
+            />
+
+            <label className="text-xs font-medium block mb-1" style={{ color: "#334155" }}>Opt-in status</label>
+            <select
+              value={editOptIn}
+              onChange={(e) => setEditOptIn(e.target.value as typeof editOptIn)}
+              className="w-full px-3 py-2 text-sm rounded-md mb-4"
+              style={{ border: "1px solid #E2E8F0", background: "#fff" }}
+            >
+              <option value="opted_in">Opted in</option>
+              <option value="opted_out">Opted out</option>
+              <option value="pending">Pending</option>
+            </select>
+
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setEditingContact(null)}
+                className="px-4 py-2 rounded-md text-sm"
+                style={{ border: "1px solid #E2E8F0" }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={submitEdit}
+                disabled={updating}
+                className="px-4 py-2 rounded-md text-sm font-medium text-white"
+                style={{ background: updating ? "#CBD5E1" : "#2563EB" }}
+              >
+                {updating ? "Saving…" : "Save"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       </>
       )}
     </div>
@@ -2352,11 +2478,11 @@ function MessagesScreen() {
               {rows.map((m) => (
                 <tr key={m.id} style={{ borderTop: "1px solid #F1F5F9" }}>
                   <td className="px-4 py-2" style={{ color: "#0F172A" }}>
-                    <div>{m.contact_name ?? "—"}</div>
-                    <div className="text-xs font-mono" style={{ color: "#94A3B8" }}>{m.phone_e164}</div>
+                    <div>{m.phone_e164 ?? "—"}</div>
+                    <div className="text-xs font-mono" style={{ color: "#94A3B8" }}>{m.meta_message_id ?? "—"}</div>
                   </td>
                   <td className="px-4 py-2" style={{ color: "#475569" }}>{m.campaign_name ?? "—"}</td>
-                  <td className="px-4 py-2 font-mono text-xs" style={{ color: "#334155" }}>{m.template_name ?? "—"}</td>
+                  <td className="px-4 py-2 font-mono text-xs" style={{ color: "#334155" }}>{m.branch_name ?? "—"}</td>
                   <td className="px-4 py-2">{statusBadge(m.status)}</td>
                   <td className="px-4 py-2 text-xs" style={{ color: "#64748B" }}>
                     {m.sent_at ? new Date(m.sent_at).toLocaleString() : "—"}

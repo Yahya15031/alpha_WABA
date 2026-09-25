@@ -27,6 +27,8 @@ import {
   type GroupUploadResponse,
   type MessagesListResponse,
   type MessagesKpisResponse,
+  type ContactUpdatePayload,
+  type ContactRow,
 
 } from "../api";
 import { useAuth } from "../auth";
@@ -414,6 +416,7 @@ export function useMessages(params?: {
   kpis: MessagesKpisResponse | null;
   loading: boolean;
   error: string | null;
+  kpisError: string | null;
   refresh: () => void;
 } {
   const { session, activeTenantId } = useAuth();
@@ -421,6 +424,7 @@ export function useMessages(params?: {
   const [kpis, setKpis] = useState<MessagesKpisResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [kpisError, setKpisError] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
   const key = JSON.stringify(params ?? {});
 
@@ -429,27 +433,39 @@ export function useMessages(params?: {
     let cancelled = false;
     let intervalId: number | undefined;
 
-    const fetchOnce = async (isInitial: boolean) => {
+    const fetchList = async (isInitial: boolean) => {
       if (isInitial) setLoading(true);
       try {
-        const [listRes, kpisRes] = await Promise.all([
-          api.messages(session.access_token, activeTenantId, JSON.parse(key)),
-          api.messagesKpis(session.access_token, activeTenantId),
-        ]);
+        const res = await api.messages(session.access_token, activeTenantId, JSON.parse(key));
         if (!cancelled) {
-          setData(listRes);
-          setKpis(kpisRes);
+          setData(res);
           setError(null);
         }
       } catch (e) {
-        if (!cancelled) setError((e as Error).message ?? String(e));
+        if (!cancelled) setError((e as Error).message || "Failed to load messages");
       } finally {
         if (!cancelled && isInitial) setLoading(false);
       }
     };
 
-    fetchOnce(true);
-    intervalId = window.setInterval(() => fetchOnce(false), MESSAGES_POLL_MS);
+    const fetchKpis = async () => {
+      try {
+        const res = await api.messagesKpis(session.access_token, activeTenantId);
+        if (!cancelled) {
+          setKpis(res);
+          setKpisError(null);
+        }
+      } catch (e) {
+        if (!cancelled) setKpisError((e as Error).message || "Failed to load KPIs");
+      }
+    };
+
+    fetchList(true);
+    fetchKpis();
+    intervalId = window.setInterval(() => {
+      fetchList(false);
+      fetchKpis();
+    }, 10_000);
 
     return () => {
       cancelled = true;
@@ -457,7 +473,61 @@ export function useMessages(params?: {
     };
   }, [session?.access_token, activeTenantId, key, tick]);
 
-  return { data, kpis, loading, error, refresh: () => setTick((t) => t + 1) };
+  return { data, kpis, loading, error, kpisError, refresh: () => setTick((t) => t + 1) };
+}
+
+export function useUpdateContact(): {
+  update: (contactId: string, payload: ContactUpdatePayload) => Promise<ContactRow>;
+  updating: boolean;
+  error: string | null;
+} {
+  const { session, activeTenantId } = useAuth();
+  const [updating, setUpdating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const update = async (contactId: string, payload: ContactUpdatePayload) => {
+    if (!session || !activeTenantId) throw new Error("Not authenticated");
+    setUpdating(true);
+    setError(null);
+    try {
+      return await api.updateContact(session.access_token, activeTenantId, contactId, payload);
+    } catch (e) {
+      const msg = (e as Error).message ?? String(e);
+      setError(msg);
+      throw e;
+    } finally {
+      setUpdating(false);
+    }
+  };
+
+  return { update, updating, error };
+}
+
+export function useArchiveContact(): {
+  archive: (contactId: string) => Promise<void>;
+  archiving: boolean;
+  error: string | null;
+} {
+  const { session, activeTenantId } = useAuth();
+  const [archiving, setArchiving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const archive = async (contactId: string) => {
+    if (!session || !activeTenantId) throw new Error("Not authenticated");
+    setArchiving(true);
+    setError(null);
+    try {
+      await api.archiveContact(session.access_token, activeTenantId, contactId);
+    } catch (e) {
+      const msg = (e as Error).message ?? String(e);
+      setError(msg);
+      throw e;
+    } finally {
+      setArchiving(false);
+    }
+  };
+
+  return { archive, archiving, error };
 }
 
 // ─── useCreateBroadcast ──────────────────────────────────────────────────────

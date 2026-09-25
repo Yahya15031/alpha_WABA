@@ -13,6 +13,7 @@ import {
 } from "recharts";
 import { ToastProvider, useToast } from "./Toast";
 import { FullPageLoader, LoginScreen, useAuth } from "../auth";
+import { ResetPasswordPage } from "./ResetPasswordPage";
 import {
   useBranches,
   useBroadcasts,
@@ -2399,6 +2400,11 @@ function MessagesScreen() {
 
 export default function App() {
   const { session, me, loading } = useAuth();
+
+  if (window.location.pathname === "/reset-password") {
+    return <ResetPasswordPage />;
+  }
+
   // Map screen names to URL paths and back — keeps refresh/back-button sane.
 const VALID_SCREENS = ["dashboard", "contacts", "campaign", "templates","logs"] as const;
 type ScreenName = typeof VALID_SCREENS[number];

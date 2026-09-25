@@ -186,10 +186,10 @@ export interface MessagesListResponse {
 }
 
 export interface MessagesKpisResponse {
-  total_sent: number;
-  total_delivered: number;
-  total_read: number;
-  total_failed: number;
+  total_sent: number | null;
+  total_delivered: number | null;
+  total_read: number | null;
+  total_failed: number | null;
 }
 
 export interface UploadPreviewRow {

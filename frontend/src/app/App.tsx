@@ -2421,20 +2421,20 @@ function MessagesScreen() {
 
       {kpis && (
         <div className="grid grid-cols-4 gap-3 mb-4">
-          {[
-            { label: "Sent", value: kpis.total_sent, color: "#1E40AF" },
-            { label: "Delivered", value: kpis.total_delivered, color: "#166534" },
-            { label: "Read", value: kpis.total_read, color: "#065F46" },
-            { label: "Failed", value: kpis.total_failed, color: "#991B1B" },
-          ].map((k) => (
-            <div key={k.label} className="p-4 rounded-lg"
-              style={{ background: "#fff", border: "1px solid #E2E8F0" }}>
-              <div className="text-xs uppercase font-medium" style={{ color: "#94A3B8" }}>{k.label}</div>
-              <div className="text-2xl font-semibold mt-1" style={{ color: k.color }}>
-                {k.value.toLocaleString()}
-              </div>
-            </div>
-          ))}
+           {[
+  { label: "Sent", value: kpis.total_sent ?? 0, color: "#1E40AF" },
+  { label: "Delivered", value: kpis.total_delivered ?? 0, color: "#166534" },
+  { label: "Read", value: kpis.total_read ?? 0, color: "#065F46" },
+  { label: "Failed", value: kpis.total_failed ?? 0, color: "#991B1B" },
+].map((k) => (
+  <div key={k.label} className="p-4 rounded-lg"
+    style={{ background: "#fff", border: "1px solid #E2E8F0" }}>
+    <div className="text-xs uppercase font-medium" style={{ color: "#94A3B8" }}>{k.label}</div>
+    <div className="text-2xl font-semibold mt-1" style={{ color: k.color }}>
+      {k.value.toLocaleString()}
+    </div>
+  </div>
+))}
         </div>
       )}
 

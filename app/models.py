@@ -136,7 +136,7 @@ class AudienceType(str, Enum):
     branch_group = "branch_group"
     csv_upload = "csv_upload"
     group = "group"          # NEW
-
+    combined = "combined"
 
 class CampaignLane(str, Enum):
     transactional = "transactional"

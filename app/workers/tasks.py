@@ -27,7 +27,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from arq import Retry
-from sqlalchemy import select, text
+from sqlalchemy import select, text, or_
 
 from app.db import get_system_session, get_worker_session
 from app.meta import get_meta_client
@@ -499,28 +499,55 @@ async def _bump_campaign_stats(
 # ---------------------------------------------------------------------------
 
 
-def _resolve_variable(path: str, contact: Contact, tenant: Tenant) -> str:
+def _resolve_variable(spec: Any, contact: Any, tenant: Tenant) -> str:
     """Resolve one variable_mapping value → concrete string.
 
-    Supported paths:
-      - `$literal:<text>`     — use the text after the colon verbatim
-      - `contact.<field>`     — read a field off the Contact row
-      - `custom.<key>`        — read from Contact.custom_fields JSON
-      - `tenant.<field>`      — read a field off the Tenant row
-    Unknown paths resolve to "" so the send doesn't crash — better an empty
-    variable than a failed campaign.
+    Accepts either:
+      - str: legacy shape ("$literal:Hi", "contact.full_name", "custom.x", "tenant.name")
+      - dict: {"source": "<path>", "fallback": "<optional string>"}
+
+    Fallback behavior:
+      - $literal:*     → literal wins, no fallback logic
+      - contact.*      → if resolved value is empty, use fallback if given, else "Receiver"
+      - custom.*       → same as contact.*
+      - tenant.*       → if empty, use fallback (default "")
+      - unknown / ""   → fallback (default "")
     """
+    if isinstance(spec, dict):
+        path = str(spec.get("source") or "")
+        fallback = str(spec.get("fallback") or "")
+        has_explicit_fallback = "fallback" in spec
+    else:
+        path = str(spec or "")
+        fallback = ""
+        has_explicit_fallback = False
+
     if not path:
-        return ""
+        return fallback
+
     if path.startswith("$literal:"):
-        return path[len("$literal:"):]
+        return path[len("$literal:") :]
+
     if path.startswith("contact."):
-        return str(getattr(contact, path[len("contact."):], "") or "")
+        value = str(getattr(contact, path[len("contact.") :], "") or "")
+        if not value:
+            return fallback if has_explicit_fallback else "Receiver"
+        return value
+
     if path.startswith("custom."):
-        return str((contact.custom_fields or {}).get(path[len("custom."):], ""))
+        cf = getattr(contact, "custom_fields", None) or {}
+        value = str(cf.get(path[len("custom.") :], "") or "")
+        if not value:
+            return fallback if has_explicit_fallback else "Receiver"
+        return value
+
     if path.startswith("tenant."):
-        return str(getattr(tenant, path[len("tenant."):], "") or "")
-    return ""
+        value = str(getattr(tenant, path[len("tenant.") :], "") or "")
+        if not value:
+            return fallback
+        return value
+
+    return fallback
 
 
 async def materialize_campaign_task(
@@ -587,17 +614,34 @@ async def materialize_campaign_task(
         branch_id = campaign.branch_id
         lane_for_sends = campaign.lane
 
-        # ---- Resolve audience ----
-        stmt = select(Contact).where(
+        # ---- Resolve audience → list of (contact-or-namespace, phone_e164, contact_id-or-None) ----
+        from types import SimpleNamespace
+        from app.models import CampaignInlineContact, ContactGroup  # local import
+
+        resolved_units: list[tuple[Any, str, uuid.UUID | None]] = []
+        seen_phones: set[str] = set()
+
+        contact_base = select(Contact).where(
             Contact.opt_in_status == ContactOptInStatus.opted_in,
             Contact.is_archived == False,
         )
+
         if audience_type == AudienceType.all_contacts:
-            stmt = stmt.where(Contact.branch_id == branch_id)
+            stmt = contact_base.where(Contact.branch_id == branch_id)
+            for c in (await session.execute(stmt)).scalars().all():
+                if c.phone_e164 in seen_phones:
+                    continue
+                seen_phones.add(c.phone_e164)
+                resolved_units.append((c, c.phone_e164, c.id))
+
         elif audience_type == AudienceType.branch_group:
-            # Phase 1: branch_group behaves like all_contacts for this branch.
-            # Extend later to multi-branch groups.
-            stmt = stmt.where(Contact.branch_id == branch_id)
+            stmt = contact_base.where(Contact.branch_id == branch_id)
+            for c in (await session.execute(stmt)).scalars().all():
+                if c.phone_e164 in seen_phones:
+                    continue
+                seen_phones.add(c.phone_e164)
+                resolved_units.append((c, c.phone_e164, c.id))
+
         elif audience_type == AudienceType.csv_upload:
             upload_id_raw = audience_config.get("upload_id")
             if not upload_id_raw:
@@ -609,7 +653,13 @@ async def materialize_campaign_task(
                 upload_uuid = uuid.UUID(upload_id_raw)
             except (ValueError, TypeError):
                 return {"success": False, "reason": "invalid_upload_id"}
-            stmt = stmt.where(Contact.csv_import_id == upload_uuid)
+            stmt = contact_base.where(Contact.csv_import_id == upload_uuid)
+            for c in (await session.execute(stmt)).scalars().all():
+                if c.phone_e164 in seen_phones:
+                    continue
+                seen_phones.add(c.phone_e164)
+                resolved_units.append((c, c.phone_e164, c.id))
+
         elif audience_type == AudienceType.group:
             group_id_raw = audience_config.get("group_id")
             if not group_id_raw:
@@ -619,16 +669,56 @@ async def materialize_campaign_task(
                 group_uuid = uuid.UUID(group_id_raw)
             except (ValueError, TypeError):
                 return {"success": False, "reason": "invalid_group_id"}
-            stmt = stmt.join(
+            stmt = contact_base.join(
                 ContactGroupMember, ContactGroupMember.contact_id == Contact.id
-            ).where(ContactGroupMember.group_id == group_uuid)    
+            ).where(ContactGroupMember.group_id == group_uuid)
+            for c in (await session.execute(stmt)).scalars().all():
+                if c.phone_e164 in seen_phones:
+                    continue
+                seen_phones.add(c.phone_e164)
+                resolved_units.append((c, c.phone_e164, c.id))
+
+        elif audience_type == AudienceType.combined:
+            branch_ids_raw = audience_config.get("branch_ids") or []
+            group_ids_raw = audience_config.get("group_ids") or []
+
+            branch_ids = [uuid.UUID(b) for b in branch_ids_raw]
+            group_ids = [uuid.UUID(g) for g in group_ids_raw]
+
+            # Union of registered contacts across selected branches + groups
+            conds = []
+            if branch_ids:
+                conds.append(Contact.branch_id.in_(branch_ids))
+            if group_ids:
+                conds.append(Contact.id.in_(
+                    select(ContactGroupMember.contact_id).where(ContactGroupMember.group_id.in_(group_ids))
+                ))
+
+            if conds:
+                combined_stmt = contact_base.where(or_(*conds))
+                for c in (await session.execute(combined_stmt)).scalars().all():
+                    if c.phone_e164 in seen_phones:
+                        continue
+                    seen_phones.add(c.phone_e164)
+                    resolved_units.append((c, c.phone_e164, c.id))
+
+            # Inline paste recipients — dedupe against registered by phone
+            inline_stmt = select(CampaignInlineContact).where(
+                CampaignInlineContact.campaign_id == campaign_uuid
+            )
+            for inline in (await session.execute(inline_stmt)).scalars().all():
+                phone = inline.phone_e164
+                if phone in seen_phones:
+                    continue
+                seen_phones.add(phone)
+                # Represent inline rows as SimpleNamespace for variable resolution
+                ns = SimpleNamespace(phone_e164=inline.phone_e164, full_name=inline.full_name, custom_fields={})
+                resolved_units.append((ns, phone, None))
+
         else:
             return {"success": False, "reason": "unknown_audience_type"}
 
-        contacts_result = await session.execute(stmt)
-        contacts = list(contacts_result.scalars().all())
-
-        if not contacts:
+        if not resolved_units:
             campaign.status = CampaignStatus.completed
             await session.execute(
                 text(
@@ -641,7 +731,7 @@ async def materialize_campaign_task(
             return {"success": True, "recipient_count": 0}
 
         # ---- Build recipient rows with resolved template variables ----
-        for contact in contacts:
+        for contact_like, phone_e164, contact_id in resolved_units:
             resolved: dict[str, str] = {}
             for var_def in template_variables:
                 idx = str(var_def.get("name") or var_def.get("index") or "")
@@ -649,13 +739,13 @@ async def materialize_campaign_task(
                 if not idx:
                     continue
                 path = variable_mappings.get(idx, "")
-                resolved[idx] = _resolve_variable(path, contact, tenant)
+                resolved[idx] = _resolve_variable(path, contact_like, tenant)
 
             recipient = CampaignRecipient(
                 tenant_id=tenant_uuid,
                 campaign_id=campaign_uuid,
-                contact_id=contact.id,
-                phone_e164=contact.phone_e164,
+                contact_id=contact_id,
+                phone_e164=phone_e164,
                 resolved_variables=resolved,
                 status=RecipientStatus.pending,
             )

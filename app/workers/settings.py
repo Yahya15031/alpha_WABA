@@ -66,7 +66,7 @@ class TransactionalWorkerSettings:
     # Reduce heartbeat frequency to 5 minutes (was ~30s default)
     health_check_interval = 300
     # When queue is empty, poll every 2 seconds (was ~0.5s default)
-    poll_delay = 20.0
+    poll_delay = 10.0
     max_jobs = 10
     job_timeout = 30  # seconds
     keep_result = 3600  # keep result rows for 1 hour for debugging
@@ -96,7 +96,7 @@ class BulkWorkerSettings:
         boot_info = {"boot_commit": os.getenv("RENDER_GIT_COMMIT", "unknown")}
     worker_boot_info = boot_info
     health_check_interval = 300
-    poll_delay = 20.0
+    poll_delay = 10.0
     max_jobs = 10
     job_timeout = 30
     keep_result = 3600

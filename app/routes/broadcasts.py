@@ -120,6 +120,7 @@ class BroadcastDetail(BaseModel):
     phone_number: BroadcastPhone
     audience_type: str
     audience_config: dict[str, Any]
+    audience_summary: str
     variable_mappings: dict[str, str]
     lane: str
     status: str
@@ -197,6 +198,28 @@ def _parse_audience(value: str) -> AudienceType:
             detail="audience_type must be one of: "
             + ", ".join(a.value for a in AudienceType),
         )
+
+
+def _audience_summary(audience_type: AudienceType, cfg: dict[str, Any]) -> str:
+    """Short label describing the audience for list/detail views."""
+    try:
+        is_combined = audience_type == AudienceType.combined
+    except AttributeError:
+        # Python enum doesn't have `combined` yet — treat as single-mode
+        is_combined = False
+
+    if not is_combined:
+        return audience_type.value
+
+    parts: list[str] = []
+    if cfg.get("branch_ids"):
+        parts.append(f"{len(cfg['branch_ids'])} branches")
+    if cfg.get("group_ids"):
+        parts.append(f"{len(cfg['group_ids'])} groups")
+    inline_n = cfg.get("inline_contacts_count")
+    if inline_n:
+        parts.append(f"{inline_n} pasted")
+    return " · ".join(parts) if parts else "empty"
 
 
 def _parse_lane(value: str) -> CampaignLane:

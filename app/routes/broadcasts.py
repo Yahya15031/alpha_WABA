@@ -470,6 +470,9 @@ async def get_broadcast(
         ) if phone else BroadcastPhone(id="", display_phone_number="?"),
         audience_type=campaign.audience_type.value,
         audience_config=dict(campaign.audience_config),
+        audience_summary=_audience_summary(
+            campaign.audience_type, dict(campaign.audience_config)
+        ),
         variable_mappings=dict(campaign.variable_mappings),
         lane=campaign.lane.value,
         status=campaign.status.value,

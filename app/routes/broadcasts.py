@@ -67,7 +67,7 @@ router = APIRouter(prefix="/broadcasts", tags=["broadcasts"])
 class BroadcastListRow(BaseModel):
     id: str
     name: str
-    branch_name: str
+    branch_name: str | None
     template_name: str
     status: str
     recipient_count: int
@@ -115,7 +115,7 @@ class BroadcastPhone(BaseModel):
 class BroadcastDetail(BaseModel):
     id: str
     name: str
-    branch: BroadcastBranch
+    branch: BroadcastBranch | None
     template: BroadcastTemplate
     phone_number: BroadcastPhone
     audience_type: str
@@ -132,7 +132,7 @@ class BroadcastDetail(BaseModel):
 
 class BroadcastCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=200)
-    branch_id: str
+    branch_id: str | None = None
     phone_number_id: str
     template_id: str
     variable_mappings: dict[str, str] = Field(
@@ -198,6 +198,56 @@ def _parse_audience(value: str) -> AudienceType:
             detail="audience_type must be one of: "
             + ", ".join(a.value for a in AudienceType),
         )
+
+
+def _validate_combined_config(cfg: dict[str, Any]) -> tuple[list[uuid.UUID], list[uuid.UUID], list[dict[str, Any]]]:
+    branch_ids_raw = cfg.get("branch_ids") or []
+    group_ids_raw = cfg.get("group_ids") or []
+    inline_raw = cfg.get("inline_contacts") or []
+
+    if not (branch_ids_raw or group_ids_raw or inline_raw):
+        raise HTTPException(
+            status_code=422,
+            detail="combined audience requires at least one of: branch_ids, group_ids, inline_contacts",
+        )
+
+    def _parse_ids(raw: list[Any], field: str) -> list[uuid.UUID]:
+        out: list[uuid.UUID] = []
+        for value in raw:
+            try:
+                out.append(uuid.UUID(str(value)))
+            except (TypeError, ValueError):
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"{field} invalid UUID: {value!r}",
+                )
+        return out
+
+    branch_ids = _parse_ids(branch_ids_raw, "audience_config.branch_ids")
+    group_ids = _parse_ids(group_ids_raw, "audience_config.group_ids")
+
+    inline_contacts: list[dict[str, Any]] = []
+    for i, entry in enumerate(inline_raw):
+        if not isinstance(entry, dict):
+            raise HTTPException(
+                status_code=422,
+                detail=f"audience_config.inline_contacts[{i}] must be an object",
+            )
+        phone = str(entry.get("phone_e164") or "").strip()
+        if not phone or not phone.startswith("+"):
+            raise HTTPException(
+                status_code=422,
+                detail=f"audience_config.inline_contacts[{i}].phone_e164 must start with '+'",
+            )
+        name = entry.get("full_name")
+        inline_contacts.append(
+            {
+                "phone_e164": phone,
+                "full_name": str(name).strip() if name else None,
+            }
+        )
+
+    return branch_ids, group_ids, inline_contacts
 
 
 def _audience_summary(audience_type: AudienceType, cfg: dict[str, Any]) -> str:
@@ -289,7 +339,7 @@ async def list_broadcasts(
             Template.name.label("template_name"),
             CampaignStats.total_recipients,
         )
-        .join(Branch, Branch.id == Campaign.branch_id)
+        .outerjoin(Branch, Branch.id == Campaign.branch_id)
         .join(Template, Template.id == Campaign.template_id)
         .outerjoin(CampaignStats, CampaignStats.campaign_id == Campaign.id)
     )
@@ -355,13 +405,29 @@ async def create_broadcast(
     Validates every referenced ID exists in this tenant (RLS enforces this
     for us — the SELECTs return None if the FK belongs to a different tenant).
     """
-    branch_uuid = _parse_uuid(body.branch_id, "branch_id")
+    audience_enum = _parse_audience(body.audience_type)
+    lane_enum = _parse_lane(body.lane)
     phone_uuid = _parse_uuid(body.phone_number_id, "phone_number_id")
     template_uuid = _parse_uuid(body.template_id, "template_id")
 
-    branch = await session.get(Branch, branch_uuid)
-    if branch is None:
-        raise HTTPException(status_code=404, detail="branch_id not found in this tenant")
+    branch: Branch | None = None
+    branch_uuid: uuid.UUID | None = None
+    if audience_enum == AudienceType.combined:
+        if body.branch_id:
+            branch_uuid = _parse_uuid(body.branch_id, "branch_id")
+            branch = await session.get(Branch, branch_uuid)
+            if branch is None:
+                raise HTTPException(status_code=404, detail="branch_id not found in this tenant")
+    else:
+        if not body.branch_id:
+            raise HTTPException(
+                status_code=422,
+                detail=f"branch_id required for audience_type='{audience_enum.value}'",
+            )
+        branch_uuid = _parse_uuid(body.branch_id, "branch_id")
+        branch = await session.get(Branch, branch_uuid)
+        if branch is None:
+            raise HTTPException(status_code=404, detail="branch_id not found in this tenant")
 
     phone = await session.get(PhoneNumber, phone_uuid)
     if phone is None:
@@ -373,10 +439,6 @@ async def create_broadcast(
     if template is None:
         raise HTTPException(status_code=404, detail="template_id not found in this tenant")
 
-    audience_enum = _parse_audience(body.audience_type)
-    lane_enum = _parse_lane(body.lane)
-
-    # Schedule sanity
     initial_status = CampaignStatus.draft
     if body.schedule == "scheduled":
         if body.scheduled_for is None:
@@ -385,6 +447,36 @@ async def create_broadcast(
                 detail="scheduled_for required when schedule='scheduled'",
             )
         initial_status = CampaignStatus.scheduled
+
+    audience_config_out: dict[str, Any] = dict(body.audience_config)
+    inline_rows: list[dict[str, Any]] = []
+    if audience_enum == AudienceType.combined:
+        from app.models import CampaignInlineContact, ContactGroup
+
+        branch_ids, group_ids, inline_rows = _validate_combined_config(body.audience_config)
+
+        for bid in branch_ids:
+            if await session.get(Branch, bid) is None:
+                raise HTTPException(status_code=404, detail=f"branch {bid} not found")
+        for gid in group_ids:
+            if await session.get(ContactGroup, gid) is None:
+                raise HTTPException(status_code=404, detail=f"group {gid} not found")
+
+        audience_config_out = {}
+        if branch_ids:
+            audience_config_out["branch_ids"] = [str(b) for b in branch_ids]
+        if group_ids:
+            audience_config_out["group_ids"] = [str(g) for g in group_ids]
+        if inline_rows:
+            seen: set[str] = set()
+            deduped: list[dict[str, Any]] = []
+            for row in inline_rows:
+                if row["phone_e164"] in seen:
+                    continue
+                seen.add(row["phone_e164"])
+                deduped.append(row)
+            inline_rows = deduped
+            audience_config_out["inline_contacts_count"] = len(inline_rows)
 
     campaign = Campaign(
         tenant_id=ctx.tenant_id,
@@ -395,7 +487,7 @@ async def create_broadcast(
         name=body.name,
         variable_mappings=body.variable_mappings,
         audience_type=audience_enum,
-        audience_config=body.audience_config,
+        audience_config=audience_config_out,
         lane=lane_enum,
         status=initial_status,
         scheduled_for=body.scheduled_for if body.schedule == "scheduled" else None,
@@ -403,6 +495,18 @@ async def create_broadcast(
     )
     session.add(campaign)
     await session.flush()
+
+    if inline_rows:
+        for row in inline_rows:
+            session.add(
+                CampaignInlineContact(
+                    tenant_id=ctx.tenant_id,
+                    campaign_id=campaign.id,
+                    phone_e164=row["phone_e164"],
+                    full_name=row["full_name"],
+                )
+            )
+        await session.flush()
 
     # Create the stats row now so the worker never has to INSERT one later.
     stats = CampaignStats(campaign_id=campaign.id, tenant_id=ctx.tenant_id)
@@ -413,7 +517,7 @@ async def create_broadcast(
     return BroadcastDetail(
         id=str(campaign.id),
         name=campaign.name,
-        branch=BroadcastBranch(id=str(branch.id), name=branch.name),
+        branch=BroadcastBranch(id=str(branch.id), name=branch.name) if branch else None,
         template=BroadcastTemplate(
             id=str(template.id), name=template.name, body_text=template.body_text
         ),
@@ -461,7 +565,7 @@ async def get_broadcast(
     return BroadcastDetail(
         id=str(campaign.id),
         name=campaign.name,
-        branch=BroadcastBranch(id=str(branch.id), name=branch.name) if branch else BroadcastBranch(id="", name="?"),
+        branch=BroadcastBranch(id=str(branch.id), name=branch.name) if branch else None,
         template=BroadcastTemplate(
             id=str(template.id), name=template.name, body_text=template.body_text
         ) if template else BroadcastTemplate(id="", name="?", body_text=""),

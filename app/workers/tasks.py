@@ -499,28 +499,37 @@ async def _bump_campaign_stats(
 # ---------------------------------------------------------------------------
 
 
-def _resolve_variable(path: str, contact: Contact, tenant: Tenant) -> str:
+def _resolve_variable(spec: Any, contact: Any, tenant: Tenant) -> str:
     """Resolve one variable_mapping value → concrete string.
 
-    Supported paths:
-      - `$literal:<text>`     — use the text after the colon verbatim
-      - `contact.<field>`     — read a field off the Contact row
-      - `custom.<key>`        — read from Contact.custom_fields JSON
-      - `tenant.<field>`      — read a field off the Tenant row
-    Unknown paths resolve to "" so the send doesn't crash — better an empty
-    variable than a failed campaign.
+    Supported forms:
+      - plain string like "contact.full_name"
+      - dict like {"source": "contact.full_name", "fallback": "Receiver"}
     """
+    if isinstance(spec, dict):
+        path = str(spec.get("source") or "")
+        fallback = str(spec.get("fallback") or "")
+        has_explicit_fallback = "fallback" in spec
+    else:
+        path = str(spec or "")
+        fallback = ""
+        has_explicit_fallback = False
+
     if not path:
-        return ""
+        return fallback
     if path.startswith("$literal:"):
         return path[len("$literal:"):]
     if path.startswith("contact."):
-        return str(getattr(contact, path[len("contact."):], "") or "")
+        value = str(getattr(contact, path[len("contact."):], "") or "")
+        return value if value else (fallback if has_explicit_fallback else "Receiver")
     if path.startswith("custom."):
-        return str((contact.custom_fields or {}).get(path[len("custom."):], ""))
+        cf = getattr(contact, "custom_fields", None) or {}
+        value = str(cf.get(path[len("custom."):], "") or "")
+        return value if value else (fallback if has_explicit_fallback else "Receiver")
     if path.startswith("tenant."):
-        return str(getattr(tenant, path[len("tenant."):], "") or "")
-    return ""
+        value = str(getattr(tenant, path[len("tenant."):], "") or "")
+        return value if value else fallback
+    return fallback
 
 
 async def materialize_campaign_task(

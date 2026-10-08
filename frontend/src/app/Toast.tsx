@@ -18,6 +18,18 @@ interface ToastContextValue {
 
 const ToastContext = createContext<ToastContextValue | null>(null);
 
+export async function readApiErrorMessage(response: Response): Promise<string> {
+  try {
+    const payload = await response.clone().json();
+    if (response.status === 500 && payload?.error_type && payload?.error_message) {
+      return `${payload.error_type}: ${payload.error_message}`;
+    }
+  } catch {
+    // Fall through to the generic fetch error below.
+  }
+  return "Failed to fetch";
+}
+
 export function useToast(): ToastContextValue {
   const ctx = useContext(ToastContext);
   if (!ctx) throw new Error("useToast must be inside <ToastProvider>");

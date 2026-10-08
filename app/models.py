@@ -135,7 +135,8 @@ class AudienceType(str, Enum):
     all_contacts = "all_contacts"
     branch_group = "branch_group"
     csv_upload = "csv_upload"
-    group = "group"          # NEW
+    group = "group"
+    combined = "combined"         
 
 
 class CampaignLane(str, Enum):
@@ -476,8 +477,11 @@ class Campaign(Base):
     tenant_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
     )
-    branch_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("branches.id", ondelete="RESTRICT"), nullable=False
+    branch_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("branches.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
     )
     waba_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("wabas.id", ondelete="RESTRICT"), nullable=False
@@ -529,8 +533,11 @@ class CampaignRecipient(Base):
     campaign_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("campaigns.id", ondelete="CASCADE"), nullable=False
     )
-    contact_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("contacts.id", ondelete="RESTRICT"), nullable=False
+    contact_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("contacts.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
     )
     phone_e164: Mapped[str] = mapped_column(Text, nullable=False)
     resolved_variables: Mapped[dict[str, Any]] = mapped_column(
@@ -551,6 +558,21 @@ class CampaignRecipient(Base):
     failed_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True))
     created_at: Mapped[datetime] = _created_at()
     updated_at: Mapped[datetime] = _updated_at()
+
+
+class CampaignInlineContact(Base):
+    __tablename__ = "campaign_inline_contacts"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    campaign_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("campaigns.id", ondelete="CASCADE"), nullable=False
+    )
+    phone_e164: Mapped[str] = mapped_column(Text, nullable=False)
+    full_name: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = _created_at()
 
 
 class WebhookEvent(Base):

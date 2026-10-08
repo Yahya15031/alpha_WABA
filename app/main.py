@@ -9,13 +9,15 @@ On Render, the startCommand in render.yaml points here:
 from __future__ import annotations
 
 import logging
+import os
+import traceback
+import uuid as _uuid
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from fastapi import Request
 
 from app.api import router as api_router
 from app.config import settings
@@ -28,7 +30,8 @@ logging.basicConfig(
     level=settings.log_level,
     format="%(asctime)s %(name)s %(levelname)s %(message)s",
 )
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("app.main")
+_EXPOSE_ERROR_DETAILS = os.getenv("EXPOSE_ERROR_DETAILS", "false").lower() == "true"
 
 
 @asynccontextmanager
@@ -67,8 +70,33 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(Exception)
     async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-        logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
-        return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+        request_id = str(_uuid.uuid4())
+        tb_tail = traceback.format_exc().splitlines()[-6:]
+
+        logger.error(
+            "Unhandled exception on %s %s | request_id=%s | %s: %s\n%s",
+            request.method,
+            request.url.path,
+            request_id,
+            type(exc).__name__,
+            str(exc),
+            "\n".join(tb_tail),
+        )
+
+        return JSONResponse(
+            status_code=500,
+            content=(
+                {
+                    "detail": "Internal server error",
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc)[:500],
+                    "request_id": request_id,
+                    "path": request.url.path,
+                }
+                if _EXPOSE_ERROR_DETAILS
+                else {"detail": "Internal server error", "request_id": request_id}
+            ),
+        )
 
     app.include_router(webhooks_router)
     app.include_router(api_router)

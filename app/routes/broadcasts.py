@@ -121,7 +121,7 @@ class BroadcastDetail(BaseModel):
     audience_type: str
     audience_config: dict[str, Any]
     audience_summary: str
-    variable_mappings: dict[str, str]
+    variable_mappings: dict[str, Any]
     lane: str
     status: str
     scheduled_for: str | None
@@ -135,7 +135,7 @@ class BroadcastCreateRequest(BaseModel):
     branch_id: str | None = None
     phone_number_id: str
     template_id: str
-    variable_mappings: dict[str, str] = Field(
+    variable_mappings: dict[str, Any] = Field(
         default_factory=dict,
         description=(
             'Maps template variable index → source. Values look like: '
@@ -160,7 +160,7 @@ class BroadcastCreateRequest(BaseModel):
 
 class BroadcastUpdateRequest(BaseModel):
     name: str | None = None
-    variable_mappings: dict[str, str] | None = None
+    variable_mappings: dict[str, Any] | None = None
     audience_type: str | None = None
     audience_config: dict[str, Any] | None = None
     lane: str | None = None

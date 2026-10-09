@@ -14,6 +14,7 @@ import {
 import { ToastProvider, useToast } from "./Toast";
 import { FullPageLoader, LoginScreen, useAuth } from "../auth";
 import { ResetPasswordPage } from "./ResetPasswordPage";
+import AcceptInvitePage from "./AcceptInvitePage";
 import {
   useArchiveContact,
   useBranches,
@@ -40,6 +41,7 @@ import type {
   InlineContact,
   LatestBroadcast,
   UploadResponse,
+  UserRow,
   VarMode,
   VarRow,
 } from "../api";
@@ -47,8 +49,12 @@ import {
   CONTACT_FIELDS,
   TENANT_FIELDS,
   emptyVarRow,
+  inviteUser,
+  listUsers,
   parsePastedContacts,
+  removeUser,
   syncTemplatesFromMeta,
+  updateUserRole,
   varRowToMapping,
 } from "../api";
 function BroadcastCreateForm({ onDone, onCancel }: { onDone: () => void; onCancel: () => void }) {
@@ -793,7 +799,12 @@ function Sidebar({
         </div>
 
         <nav className="flex-1 flex flex-col gap-0.5 px-3 py-4 overflow-y-auto">
-          {navItems.map((item) => {
+          {[
+            ...navItems,
+            ...((me?.is_platform_admin || activeMembership?.role === "tenant_admin")
+              ? [{ id: "users", label: "Users", icon: Users }]
+              : []),
+          ].map((item) => {
             const isActive = active === item.id;
             const Icon = item.icon;
             return (
@@ -2520,6 +2531,172 @@ function BroadcastsScreen() {
   );
 }
 
+function UsersScreen() {
+  const [users, setUsers] = useState<UserRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showInvite, setShowInvite] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [inviteRole, setInviteRole] = useState<'tenant_admin' | 'tenant_user'>('tenant_user');
+  const [busy, setBusy] = useState(false);
+  const toast = useToast();
+
+  async function refresh() {
+    setLoading(true);
+    try {
+      setUsers(await listUsers());
+    } catch (e: any) {
+      toast.push({ variant: 'error', message: e.message || 'Load failed' });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => { void refresh(); }, []);
+
+  async function doInvite() {
+    if (!inviteEmail.trim()) return;
+    setBusy(true);
+    try {
+      await inviteUser(inviteEmail.trim(), inviteRole);
+      toast.push({ variant: 'success', message: `Invite sent to ${inviteEmail}` });
+      setShowInvite(false);
+      setInviteEmail('');
+      await refresh();
+    } catch (e: any) {
+      toast.push({ variant: 'error', message: e.message || 'Invite failed' });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function doRoleChange(id: string, role: 'tenant_admin' | 'tenant_user') {
+    try {
+      await updateUserRole(id, role);
+      await refresh();
+    } catch (e: any) {
+      toast.push({ variant: 'error', message: e.message || 'Role update failed' });
+    }
+  }
+
+  async function doRemove(id: string, email: string) {
+    if (!confirm(`Suspend ${email}?`)) return;
+    try {
+      await removeUser(id);
+      await refresh();
+    } catch (e: any) {
+      toast.push({ variant: 'error', message: e.message || 'Remove failed' });
+    }
+  }
+
+  return (
+    <div className="p-6">
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-xl font-semibold" style={{ color: '#0F172A' }}>Users</h2>
+        <button
+          onClick={() => setShowInvite(true)}
+          className="px-3 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm"
+        >
+          + Invite user
+        </button>
+      </div>
+
+      {loading ? (
+        <div style={{ color: '#64748B' }}>Loading…</div>
+      ) : (
+        <table className="w-full border rounded" style={{ background: '#fff', borderColor: '#E2E8F0' }}>
+          <thead className="bg-gray-50 text-left text-sm" style={{ background: '#F8FAFC' }}>
+            <tr>
+              <th className="p-2">Email</th>
+              <th className="p-2">Role</th>
+              <th className="p-2">Status</th>
+              <th className="p-2">Invited</th>
+              <th className="p-2" />
+            </tr>
+          </thead>
+          <tbody>
+            {users.map((u) => (
+              <tr key={u.id} className="border-t text-sm" style={{ borderTopColor: '#E2E8F0' }}>
+                <td className="p-2">{u.email}</td>
+                <td className="p-2">
+                  <select
+                    value={u.role}
+                    onChange={(e) => doRoleChange(u.id, e.target.value as 'tenant_admin' | 'tenant_user')}
+                    className="border rounded p-1"
+                    style={{ borderColor: '#E2E8F0', background: '#fff' }}
+                  >
+                    <option value="tenant_user">User</option>
+                    <option value="tenant_admin">Admin</option>
+                  </select>
+                </td>
+                <td className="p-2">
+                  <span
+                    className="px-2 py-0.5 rounded text-xs"
+                    style={{
+                      background:
+                        u.status === 'active' ? '#DCFCE7' :
+                        u.status === 'invited' ? '#FEF3C7' : '#E2E8F0',
+                      color:
+                        u.status === 'active' ? '#166534' :
+                        u.status === 'invited' ? '#92400E' : '#475569',
+                    }}
+                  >
+                    {u.status}
+                  </span>
+                </td>
+                <td className="p-2 text-gray-500">{u.invited_at ? new Date(u.invited_at).toLocaleDateString() : '-'}</td>
+                <td className="p-2 text-right">
+                  {u.status !== 'suspended' && (
+                    <button onClick={() => doRemove(u.id, u.email)} className="text-red-600 text-xs hover:underline">
+                      Suspend
+                    </button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      {showInvite && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center">
+          <div className="bg-white p-6 rounded shadow-lg w-96 space-y-3">
+            <h3 className="font-semibold">Invite a user</h3>
+            <input
+              type="email"
+              placeholder="colleague@example.com"
+              value={inviteEmail}
+              onChange={(e) => setInviteEmail(e.target.value)}
+              className="w-full border rounded p-2"
+              style={{ borderColor: '#E2E8F0' }}
+            />
+            <select
+              value={inviteRole}
+              onChange={(e) => setInviteRole(e.target.value as 'tenant_admin' | 'tenant_user')}
+              className="w-full border rounded p-2"
+              style={{ borderColor: '#E2E8F0', background: '#fff' }}
+            >
+              <option value="tenant_user">Tenant user (can run campaigns)</option>
+              <option value="tenant_admin">Tenant admin (full access)</option>
+            </select>
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setShowInvite(false)} className="px-3 py-1 border rounded">
+                Cancel
+              </button>
+              <button
+                onClick={doInvite}
+                disabled={busy || !inviteEmail}
+                className="px-3 py-1 bg-blue-600 text-white rounded disabled:opacity-50"
+              >
+                {busy ? 'Sending…' : 'Send invite'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function TemplatesScreen() {
   const { session, activeTenantId } = useAuth();
   const { templates, loading, error, refetch: refetchTemplates } = useTemplates();
@@ -2824,9 +3001,12 @@ export default function App() {
   if (window.location.pathname === "/reset-password") {
     return <ResetPasswordPage />;
   }
+  if (window.location.pathname === "/accept-invite") {
+    return <AcceptInvitePage />;
+  }
 
   // Map screen names to URL paths and back — keeps refresh/back-button sane.
-const VALID_SCREENS = ["dashboard", "contacts", "campaign", "templates","logs"] as const;
+const VALID_SCREENS = ["dashboard", "contacts", "campaign", "templates", "logs", "users"] as const;
 type ScreenName = typeof VALID_SCREENS[number];
 
 function screenFromPath(): ScreenName {
@@ -2863,6 +3043,7 @@ useEffect(() => {
     else if (id === "campaigns") setScreen("campaign");
     else if (id === "logs") setScreen("logs");
     else if (id === "templates") setScreen("templates");
+    else if (id === "users") setScreen("users");
     else setScreen("dashboard");
   };
 
@@ -2871,6 +3052,7 @@ useEffect(() => {
     screen === "campaign" ? "campaigns" :
     screen === "logs" ? "logs" :
     screen === "templates" ? "templates" :
+    screen === "users" ? "users" :
     "dashboard";
 
 
@@ -2903,6 +3085,7 @@ useEffect(() => {
           {screen === "campaign"  && <BroadcastsScreen />}
           {screen === "logs"      && <MessagesScreen />}
           {screen === "templates" && <TemplatesScreen />}
+          {screen === "users"     && <UsersScreen />}
 
         </main>
       </div>

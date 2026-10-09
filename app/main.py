@@ -24,7 +24,8 @@ from app.config import settings
 from app.db import dispose_engine, ping
 from app.routes import router as routes_router
 from app.webhooks import router as webhooks_router
-
+from app.routes import users as users_routes
+app.include_router(users_routes.router)
 
 logging.basicConfig(
     level=settings.log_level,

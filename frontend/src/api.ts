@@ -403,6 +403,72 @@ export interface TemplateSyncSummary {
   errors: string[];
 }
 
+export interface UserRow {
+  id: string;
+  user_id: string;
+  email: string;
+  role: 'tenant_admin' | 'tenant_user';
+  status: 'active' | 'invited' | 'suspended';
+  invited_at: string | null;
+  accepted_at: string | null;
+}
+
+export async function listUsers(): Promise<UserRow[]> {
+  const { supabase } = await import('./auth');
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  const tenantId = localStorage.getItem('activeTenantId');
+  if (!token) throw new Error('Not authenticated');
+  const res = await apiFetch('/users', { token, tenantId: tenantId ?? undefined });
+  if (!res.ok) throw new Error('Failed to load users');
+  return res.json();
+}
+
+export async function inviteUser(email: string, role: 'tenant_admin' | 'tenant_user') {
+  const { supabase } = await import('./auth');
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  const tenantId = localStorage.getItem('activeTenantId');
+  if (!token) throw new Error('Not authenticated');
+  const res = await apiFetch('/users/invite', {
+    method: 'POST',
+    token,
+    tenantId: tenantId ?? undefined,
+    body: { email, role },
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { error_message?: string; detail?: string }).error_message || (body as { detail?: string }).detail || 'Invite failed');
+  }
+  return res.json();
+}
+
+export async function updateUserRole(membershipId: string, role: 'tenant_admin' | 'tenant_user') {
+  const { supabase } = await import('./auth');
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  const tenantId = localStorage.getItem('activeTenantId');
+  if (!token) throw new Error('Not authenticated');
+  const res = await apiFetch(`/users/${membershipId}/role`, {
+    method: 'PATCH',
+    token,
+    tenantId: tenantId ?? undefined,
+    body: { role },
+  });
+  if (!res.ok) throw new Error('Failed to update role');
+  return res.json();
+}
+
+export async function removeUser(membershipId: string) {
+  const { supabase } = await import('./auth');
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  const tenantId = localStorage.getItem('activeTenantId');
+  if (!token) throw new Error('Not authenticated');
+  const res = await apiFetch(`/users/${membershipId}`, { method: 'DELETE', token, tenantId: tenantId ?? undefined });
+  if (!res.ok && res.status !== 204) throw new Error('Failed to remove user');
+}
+
 export async function syncTemplatesFromMeta(token: string, tenantId: string): Promise<TemplateSyncSummary> {
   const res = await apiFetch('/templates/sync', {
     method: 'POST',

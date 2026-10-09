@@ -60,6 +60,32 @@ class MetaCloudAPIClient:
         self._base_url = f"{graph_api_base_url.rstrip('/')}/{api_version}"
         self._timeout = timeout_seconds
 
+async def list_templates(self, waba_id: str) -> list[dict[str, Any]]:
+        """Fetch all message templates for a WABA from Meta, paginated."""
+        results: list[dict[str, Any]] = []
+        url = f"{self._base_url}/{waba_id}/message_templates"
+        params: dict[str, Any] = {
+            "limit": 100,
+            "fields": "id,name,language,status,category,components",
+        }
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            while url:
+                response = await client.get(
+                    url,
+                    params=params,
+                    headers={"Authorization": f"Bearer {self._access_token}"},
+                )
+                response.raise_for_status()
+                data = response.json()
+                results.extend(data.get("data", []))
+                next_url = (data.get("paging") or {}).get("next")
+                if next_url:
+                    url = next_url
+                    params = {}
+                else:
+                    url = None
+        return results
+
     async def send_template_message(
         self,
     *,

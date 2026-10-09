@@ -277,36 +277,32 @@ export function useTemplates(): {
   templates: TemplateRow[];
   loading: boolean;
   error: string | null;
+  refetch: () => Promise<void>;
 } {
   const { session, activeTenantId } = useAuth();
   const [templates, setTemplates] = useState<TemplateRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const refetch = async () => {
     if (!session || !activeTenantId) return;
-    let cancelled = false;
     setLoading(true);
-    api
-      .templates(session.access_token, activeTenantId)
-      .then((res) => {
-        if (!cancelled) {
-          setTemplates(res.data);
-          setError(null);
-        }
-      })
-      .catch((e) => {
-        if (!cancelled) setError((e as Error).message ?? String(e));
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
+    try {
+      const res = await api.templates(session.access_token, activeTenantId);
+      setTemplates(res.data);
+      setError(null);
+    } catch (e) {
+      setError((e as Error).message ?? String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void refetch();
   }, [session?.access_token, activeTenantId]);
 
-  return { templates, loading, error };
+  return { templates, loading, error, refetch };
 }
 
 // ─── usePhoneNumbers ─────────────────────────────────────────────────────────

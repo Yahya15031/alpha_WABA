@@ -48,6 +48,7 @@ import {
   TENANT_FIELDS,
   emptyVarRow,
   parsePastedContacts,
+  syncTemplatesFromMeta,
   varRowToMapping,
 } from "../api";
 function BroadcastCreateForm({ onDone, onCancel }: { onDone: () => void; onCancel: () => void }) {
@@ -2520,19 +2521,62 @@ function BroadcastsScreen() {
 }
 
 function TemplatesScreen() {
-  const { templates, loading, error } = useTemplates();
+  const { session, activeTenantId } = useAuth();
+  const { templates, loading, error, refetch: refetchTemplates } = useTemplates();
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const toast = useToast();
   const statusStyle = (status: string) => ({
     background: status === "approved" ? "#DCFCE7" : status === "pending" ? "#FEF3C7" : "#FEE2E2",
     color: status === "approved" ? "#166534" : status === "pending" ? "#92400E" : "#991B1B",
   });
+
+  async function handleSync() {
+    if (!session || !activeTenantId) return;
+    setSyncing(true);
+    try {
+      const summary = await syncTemplatesFromMeta(session.access_token, activeTenantId);
+      const parts: string[] = [];
+      if (summary.created) parts.push(`${summary.created} new`);
+      if (summary.updated) parts.push(`${summary.updated} updated`);
+      if (summary.unchanged) parts.push(`${summary.unchanged} unchanged`);
+      toast.push({
+        variant: "success",
+        message: `Templates synced: ${parts.join(", ") || "nothing to update"}`,
+      });
+      if (summary.errors.length) {
+        toast.push({
+          variant: "info",
+          message: `Partial errors: ${summary.errors[0]}`,
+        });
+      }
+      await refetchTemplates();
+    } catch (e: any) {
+      toast.push({
+        variant: "error",
+        message: `Sync failed: ${e.message || e}`,
+      });
+    } finally {
+      setSyncing(false);
+    }
+  }
+
   return (
     <div className="p-6 max-w-5xl mx-auto">
-      <div className="mb-6">
-        <h1 className="text-2xl font-semibold" style={{ color: "#0F172A" }}>Message Templates</h1>
-        <p className="text-sm mt-1" style={{ color: "#64748B" }}>
-          {templates.length > 0 ? `${templates.length} template${templates.length !== 1 ? "s" : ""}` : "Loading…"}
-        </p>
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-2xl font-semibold" style={{ color: "#0F172A" }}>Message Templates</h1>
+          <p className="text-sm mt-1" style={{ color: "#64748B" }}>
+            {templates.length > 0 ? `${templates.length} template${templates.length !== 1 ? "s" : ""}` : "Loading…"}
+          </p>
+        </div>
+        <button
+          onClick={handleSync}
+          disabled={syncing}
+          className="px-3 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 text-sm"
+        >
+          {syncing ? "Syncing…" : "Sync from Meta"}
+        </button>
       </div>
       {error && (
         <div className="p-4 rounded-md text-sm mb-4" style={{ background: "#FEF2F2", color: "#991B1B", border: "1px solid #FECACA" }}>

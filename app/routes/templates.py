@@ -11,6 +11,7 @@ Phase-2 add. For now, admins just don't use old templates.
 """
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import datetime
 from typing import Any
@@ -27,7 +28,8 @@ from app.auth import (
     get_current_user,
     get_tenant_scoped_session,
 )
-from app.models import Template, TemplateCategory, TemplateStatus
+from app.meta import get_meta_client
+from app.models import Template, TemplateCategory, TemplateStatus, Waba, WabaStatus
 
 router = APIRouter(prefix="/templates", tags=["templates"])
 
@@ -116,6 +118,43 @@ def _parse_status(value: str) -> TemplateStatus:
             detail=f"Invalid status '{value}'. Use one of: "
             + ", ".join(s.value for s in TemplateStatus),
         )
+
+
+_STATUS_MAP = {
+    "APPROVED": TemplateStatus.approved,
+    "PENDING": TemplateStatus.pending,
+    "REJECTED": TemplateStatus.rejected,
+    "PAUSED": TemplateStatus.paused,
+}
+
+_CATEGORY_MAP = {
+    "MARKETING": TemplateCategory.marketing,
+    "UTILITY": TemplateCategory.utility,
+    "AUTHENTICATION": TemplateCategory.authentication,
+}
+
+
+def _extract_body(components: list[dict[str, Any]]) -> str:
+    for component in components or []:
+        if component.get("type") == "BODY":
+            return component.get("text") or ""
+    return ""
+
+
+def _extract_variables(components: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Parse {{one}} / {{1}} tokens from the BODY component in template order."""
+    text = _extract_body(components)
+    if not text:
+        return []
+    tokens = re.findall(r"\{\{(\w+)\}\}", text)
+    seen: set[str] = set()
+    out: list[dict[str, Any]] = []
+    for token in tokens:
+        if token in seen:
+            continue
+        seen.add(token)
+        out.append({"index": int(token)} if token.isdigit() else {"name": token})
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -229,3 +268,85 @@ async def update_template(
     await session.flush()
     await session.refresh(template)
     return _to_response(template)
+
+
+@router.post("/sync")
+async def sync_templates_from_meta(
+    ctx: TenantContext = Depends(get_active_tenant_context),
+    session: AsyncSession = Depends(get_tenant_scoped_session),
+) -> dict[str, Any]:
+    """Pull all templates from Meta for this tenant's active WABAs and upsert them."""
+    wabas = (
+        await session.execute(select(Waba).where(Waba.status == WabaStatus.active))
+    ).scalars().all()
+
+    if not wabas:
+        raise HTTPException(status_code=404, detail="No active WABAs for this tenant")
+
+    client = get_meta_client()
+    summary: dict[str, Any] = {"created": 0, "updated": 0, "unchanged": 0, "errors": []}
+
+    for waba in wabas:
+        try:
+            meta_templates = await client.list_templates(waba.meta_waba_id)
+        except Exception as exc:
+            summary["errors"].append(f"waba {waba.id}: {type(exc).__name__}: {exc}")
+            continue
+
+        for meta_template in meta_templates:
+            name = meta_template.get("name")
+            lang = meta_template.get("language")
+            if not name or not lang:
+                continue
+
+            components = meta_template.get("components") or []
+            body_text = _extract_body(components)
+            var_defs = _extract_variables(components)
+            status = _STATUS_MAP.get(str(meta_template.get("status", "")).upper(), TemplateStatus.pending)
+            category = _CATEGORY_MAP.get(str(meta_template.get("category", "")).upper(), TemplateCategory.utility)
+            meta_tpl_id = meta_template.get("id")
+
+            existing = await session.scalar(
+                select(Template).where(
+                    Template.waba_id == waba.id,
+                    Template.name == name,
+                    Template.language_code == lang,
+                )
+            )
+
+            if existing:
+                changed = False
+                if existing.status != status:
+                    existing.status = status
+                    changed = True
+                if existing.body_text != body_text:
+                    existing.body_text = body_text
+                    changed = True
+                if list(existing.variable_definitions or []) != var_defs:
+                    existing.variable_definitions = var_defs
+                    changed = True
+                if existing.category != category:
+                    existing.category = category
+                    changed = True
+                if meta_tpl_id and getattr(existing, "meta_template_id", None) != meta_tpl_id:
+                    existing.meta_template_id = meta_tpl_id
+                    changed = True
+                summary["updated" if changed else "unchanged"] += 1
+            else:
+                session.add(
+                    Template(
+                        tenant_id=ctx.tenant_id,
+                        waba_id=waba.id,
+                        meta_template_id=meta_tpl_id,
+                        name=name,
+                        language_code=lang,
+                        category=category,
+                        status=status,
+                        body_text=body_text,
+                        variable_definitions=var_defs,
+                    )
+                )
+                summary["created"] += 1
+
+    await session.flush()
+    return summary

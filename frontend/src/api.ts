@@ -23,18 +23,22 @@ interface RequestOptions {
   tenantId?: string | null;
 }
 
-async function request<T>(path: string, opts: RequestOptions): Promise<T> {
+async function apiFetch(path: string, opts: RequestOptions): Promise<Response> {
   const headers: Record<string, string> = {
     Authorization: `Bearer ${opts.token}`,
     "Content-Type": "application/json",
   };
   if (opts.tenantId) headers["X-Tenant-Id"] = opts.tenantId;
 
-  const res = await fetch(`${API_URL}${path}`, {
+  return fetch(`${API_URL}${path}`, {
     method: opts.method || "GET",
     headers,
     body: opts.body ? JSON.stringify(opts.body) : undefined,
   });
+}
+
+async function request<T>(path: string, opts: RequestOptions): Promise<T> {
+  const res = await apiFetch(path, opts);
 
   if (!res.ok) {
     let detail = res.statusText || "Request failed";
@@ -390,6 +394,28 @@ export interface BroadcastDetail {
     avg_latency_ms: number | null;
     p95_latency_ms: number | null;
   };
+}
+
+export interface TemplateSyncSummary {
+  created: number;
+  updated: number;
+  unchanged: number;
+  errors: string[];
+}
+
+export async function syncTemplatesFromMeta(token: string, tenantId: string): Promise<TemplateSyncSummary> {
+  const res = await apiFetch('/templates/sync', {
+    method: 'POST',
+    token,
+    tenantId,
+  });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { error_message?: string; detail?: string }).error_message || (body as { detail?: string }).detail || 'Sync failed');
+  }
+
+  return res.json();
 }
 
 export function parsePastedContacts(text: string): InlineContact[] {

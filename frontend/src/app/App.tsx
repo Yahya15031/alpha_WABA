@@ -37,9 +37,11 @@ import type {
   CampaignStatusCounts,
   ContactRow,
   GroupUploadResponse,
+  InlineContact,
   LatestBroadcast,
   UploadResponse,
 } from "../api";
+import { parsePastedContacts } from "../api";
 function BroadcastCreateForm({ onDone, onCancel }: { onDone: () => void; onCancel: () => void }) {
   const toast = useToast();
   const [name, setName] = useState("");
@@ -50,6 +52,12 @@ function BroadcastCreateForm({ onDone, onCancel }: { onDone: () => void; onCance
   const { groups } = useGroups();
   const [audienceType, setAudienceType] = useState<"all_contacts" | "branch_group" | "group">("all_contacts");
   const [selectedGroupId, setSelectedGroupId] = useState("");
+  const [audienceMode, setAudienceMode] = useState<"single" | "combined">("single");
+  const [branchIds, setBranchIds] = useState<string[]>([]);
+  const [groupIds, setGroupIds] = useState<string[]>([]);
+  const [pasteText, setPasteText] = useState("");
+  const [pastedContacts, setPastedContacts] = useState<InlineContact[]>([]);
+  const [showPreview, setShowPreview] = useState(false);
 
   const [variableMappings, setVariableMappings] = useState<Record<string, string>>({});
 
@@ -71,29 +79,68 @@ function BroadcastCreateForm({ onDone, onCancel }: { onDone: () => void; onCance
   }, [selectedTemplate?.id]);
 
   const canSubmit =
-    name.trim() && templateId && phoneNumberId && branchId &&
-    (audienceType !== "group" || selectedGroupId) &&
-    Object.values(variableMappings).every((v) => v.trim().length > 0) &&
-    !creating;
+    name.trim() &&
+    templateId &&
+    phoneNumberId &&
+    (!creating) &&
+    (
+      (audienceMode === "single"
+        ? !!branchId && (audienceType !== "group" || selectedGroupId)
+        : branchIds.length > 0 || groupIds.length > 0 || pastedContacts.length > 0)
+    ) &&
+    Object.values(variableMappings).every((v) => v.trim().length > 0);
 
-    const handleSubmit = async () => {
+  const handleSubmit = async () => {
     if (!canSubmit) return;
+
+    if (
+      audienceMode === "combined" &&
+      !branchIds.length &&
+      !groupIds.length &&
+      !pastedContacts.length
+    ) {
+      toast.push({
+        variant: "error",
+        message: "Select at least one branch, group, or paste some numbers.",
+      });
+      return;
+    }
+
     try {
       const literalMappings: Record<string, string> = {};
       for (const [k, v] of Object.entries(variableMappings)) {
         literalMappings[k] = `$literal:${v}`;
       }
-      await create({
-        name: name.trim(),
-        branch_id: branchId,
-        phone_number_id: phoneNumberId,
-        template_id: templateId,
-        variable_mappings: literalMappings,
-        audience_type: audienceType,
-        audience_config: audienceType === "group" ? { group_id: selectedGroupId } : {},
-        lane: "bulk",
-        schedule: "immediate",
-      });
+
+      const payload = audienceMode === "single"
+        ? {
+            name: name.trim(),
+            branch_id: branchId,
+            phone_number_id: phoneNumberId,
+            template_id: templateId,
+            variable_mappings: literalMappings,
+            audience_type: audienceType,
+            audience_config: audienceType === "group" ? { group_id: selectedGroupId } : {},
+            lane: "bulk" as const,
+            schedule: "immediate" as const,
+          }
+        : {
+            name: name.trim(),
+            branch_id: null,
+            phone_number_id: phoneNumberId,
+            template_id: templateId,
+            variable_mappings: literalMappings,
+            audience_type: "combined" as const,
+            audience_config: {
+              ...(branchIds.length ? { branch_ids: branchIds } : {}),
+              ...(groupIds.length ? { group_ids: groupIds } : {}),
+              ...(pastedContacts.length ? { inline_contacts: pastedContacts } : {}),
+            },
+            lane: "bulk" as const,
+            schedule: "immediate" as const,
+          };
+
+      await create(payload);
       toast.push({
         variant: "success",
         message: "Campaign created successfully.",
@@ -143,30 +190,155 @@ function BroadcastCreateForm({ onDone, onCancel }: { onDone: () => void; onCance
         </div>
         </div>
 
-        <div>
-          <label className="text-sm font-medium block mb-1" style={{ color: "#334155" }}>Audience</label>
-          <select
-            value={audienceType}
-            onChange={(e) => setAudienceType(e.target.value as typeof audienceType)}
-            className="w-full px-3 py-2 text-sm rounded-md outline-none mb-2"
-            style={{ border: "1px solid #E2E8F0", background: "#fff" }}
-          >
-            <option value="all_contacts">All contacts in tenant</option>
-            <option value="branch_group">Only the owning branch</option>
-            <option value="group">A specific group</option>
-          </select>
-          {audienceType === "group" && (
-            <select
-              value={selectedGroupId}
-              onChange={(e) => setSelectedGroupId(e.target.value)}
-              className="w-full px-3 py-2 text-sm rounded-md outline-none"
-              style={{ border: "1px solid #E2E8F0", background: "#fff" }}
+        <div className="space-y-4">
+          <label className="text-sm font-medium block" style={{ color: "#334155" }}>Audience</label>
+
+          <div className="flex gap-2 border-b">
+            <button
+              type="button"
+              className={`px-3 py-2 ${audienceMode === "single" ? "border-b-2 border-blue-600 font-medium" : "text-gray-500"}`}
+              onClick={() => setAudienceMode("single")}
             >
-              <option value="">Select a group</option>
-              {groups.map((g) => (
-                <option key={g.id} value={g.id}>{g.name} ({g.member_count})</option>
-              ))}
-            </select>
+              Single branch
+            </button>
+            <button
+              type="button"
+              className={`px-3 py-2 ${audienceMode === "combined" ? "border-b-2 border-blue-600 font-medium" : "text-gray-500"}`}
+              onClick={() => setAudienceMode("combined")}
+            >
+              Mix &amp; match
+            </button>
+          </div>
+
+          {audienceMode === "single" ? (
+            <>
+              <select
+                value={branchId}
+                onChange={(e) => setBranchId(e.target.value)}
+                className="w-full px-3 py-2 text-sm rounded-md outline-none"
+                style={{ border: "1px solid #E2E8F0", background: "#fff" }}
+              >
+                <option value="">Select a branch</option>
+                {branches.map((b) => (
+                  <option key={b.id} value={b.id}>{b.name}</option>
+                ))}
+              </select>
+
+              <select
+                value={audienceType}
+                onChange={(e) => setAudienceType(e.target.value as typeof audienceType)}
+                className="w-full px-3 py-2 text-sm rounded-md outline-none"
+                style={{ border: "1px solid #E2E8F0", background: "#fff" }}
+              >
+                <option value="all_contacts">All contacts in branch</option>
+                <option value="group">A specific group in this branch</option>
+              </select>
+
+              {audienceType === "group" && (
+                <select
+                  value={selectedGroupId}
+                  onChange={(e) => setSelectedGroupId(e.target.value)}
+                  className="w-full px-3 py-2 text-sm rounded-md outline-none"
+                  style={{ border: "1px solid #E2E8F0", background: "#fff" }}
+                >
+                  <option value="">Select a group</option>
+                  {groups.map((g) => (
+                    <option key={g.id} value={g.id}>{g.name} ({g.member_count})</option>
+                  ))}
+                </select>
+              )}
+            </>
+          ) : (
+            <div className="space-y-4">
+              <div>
+                <div className="text-sm font-medium mb-1">Branches (any contacts in these)</div>
+                <div className="border rounded p-2 max-h-32 overflow-y-auto space-y-1">
+                  {branches.map((b) => (
+                    <label key={b.id} className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={branchIds.includes(b.id)}
+                        onChange={(e) => setBranchIds((prev) =>
+                          e.target.checked ? [...prev, b.id] : prev.filter((x) => x !== b.id)
+                        )}
+                      />
+                      {b.name}
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <div className="text-sm font-medium mb-1">Groups</div>
+                <div className="border rounded p-2 max-h-32 overflow-y-auto space-y-1">
+                  {groups.map((g) => (
+                    <label key={g.id} className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={groupIds.includes(g.id)}
+                        onChange={(e) => setGroupIds((prev) =>
+                          e.target.checked ? [...prev, g.id] : prev.filter((x) => x !== g.id)
+                        )}
+                      />
+                      {g.name}
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <div className="text-sm font-medium mb-1">
+                  Paste numbers (one per line, optionally with a name)
+                </div>
+                <textarea
+                  rows={4}
+                  placeholder={"+923001234567\n+923009876543, Ali Khan\nHina Shah, 0321-5551234"}
+                  value={pasteText}
+                  onChange={(e) => setPasteText(e.target.value)}
+                  className="w-full border rounded p-2 font-mono text-sm"
+                  style={{ border: "1px solid #E2E8F0", background: "#fff" }}
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPastedContacts(parsePastedContacts(pasteText));
+                    setShowPreview(true);
+                  }}
+                  className="mt-2 px-3 py-1 border rounded text-sm hover:bg-gray-50"
+                >
+                  Preview parse
+                </button>
+
+                {showPreview && (
+                  <div className="mt-2 border rounded max-h-40 overflow-y-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gray-50 text-left">
+                        <tr>
+                          <th className="p-1 px-2">Phone</th>
+                          <th className="p-1 px-2">Name</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {pastedContacts.length === 0 && (
+                          <tr>
+                            <td colSpan={2} className="p-2 text-gray-500">No rows parsed</td>
+                          </tr>
+                        )}
+                        {pastedContacts.map((c, i) => (
+                          <tr key={i} className="border-t">
+                            <td className="p-1 px-2 font-mono">{c.phone_e164}</td>
+                            <td className="p-1 px-2">{c.full_name || <span className="text-gray-400">(no name)</span>}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    <div className="p-2 text-xs text-gray-600 border-t">
+                      {pastedContacts.length} unique recipient{pastedContacts.length === 1 ? "" : "s"} will be added.
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
           )}
         </div>
 

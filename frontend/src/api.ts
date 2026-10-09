@@ -290,6 +290,21 @@ export interface PhoneNumbersListResponse {
 export type BroadcastStatus =
   | "draft" | "scheduled" | "queued" | "running"
   | "completed" | "failed" | "canceled";
+
+export type AudienceMode =
+  | "all_contacts" | "branch_group" | "csv_upload" | "group" | "combined";
+
+export interface InlineContact {
+  phone_e164: string;
+  full_name: string | null;
+}
+
+export interface CombinedAudienceConfig {
+  branch_ids?: string[];
+  group_ids?: string[];
+  inline_contacts?: InlineContact[];
+}
+
 export interface BroadcastListRow {
   id: string;
   name: string;
@@ -308,14 +323,14 @@ export interface BroadcastsListResponse {
 
 export interface BroadcastCreatePayload {
   name: string;
-  branch_id: string;               // always required
+  branch_id: string | null;
   phone_number_id: string;
   template_id: string;
-  variable_mappings: Record<string, string>;  // key is variable NAME, e.g. "one","two"
-  audience_type: "all_contacts" | "branch_group" | "csv_upload" | "group";
-  audience_config: Record<string, unknown>;   // {} for all_contacts and branch_group
-  lane?: "transactional" | "bulk";            // default bulk
-  schedule?: "immediate" | "scheduled";       // default immediate
+  variable_mappings: Record<string, any>;
+  audience_type: AudienceMode;
+  audience_config: Record<string, any>;
+  lane?: "transactional" | "bulk";
+  schedule?: "immediate" | "scheduled";
   scheduled_for?: string | null;
 }
 
@@ -341,6 +356,54 @@ export interface BroadcastDetail {
     avg_latency_ms: number | null;
     p95_latency_ms: number | null;
   };
+}
+
+export function parsePastedContacts(text: string): InlineContact[] {
+  const lines = text
+    .split(/[\r\n]+/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const out: InlineContact[] = [];
+  const seen = new Set<string>();
+
+  for (const line of lines) {
+    const parts = line.split(/[ ,\t;|]/).map((p) => p.trim()).filter(Boolean);
+    let phone = "";
+    let name: string | null = null;
+
+    if (parts.length === 1) {
+      phone = normalizePhone(parts[0]);
+    } else if (parts.length >= 2) {
+      const [a, b] = parts;
+      if (countDigits(a) >= countDigits(b)) {
+        phone = normalizePhone(a);
+        name = b || null;
+      } else {
+        phone = normalizePhone(b);
+        name = a || null;
+      }
+    }
+
+    if (!phone || seen.has(phone)) continue;
+    seen.add(phone);
+    out.push({ phone_e164: phone, full_name: name });
+  }
+
+  return out;
+}
+
+function normalizePhone(s: string): string {
+  const digits = s.replace(/\D/g, "");
+  if (!digits) return "";
+  if (s.trim().startsWith("+")) return "+" + digits;
+  if (digits.startsWith("0")) return "+92" + digits.slice(1);
+  if (digits.startsWith("92")) return "+" + digits;
+  return "+" + digits;
+}
+
+function countDigits(s: string): number {
+  return (s.match(/\d/g) || []).length;
 }
 
 export interface SendResponse {

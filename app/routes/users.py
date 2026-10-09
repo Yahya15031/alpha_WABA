@@ -9,7 +9,7 @@ from app.auth import (
     CurrentUser, TenantContext,
     get_active_tenant_context, get_current_user, get_tenant_scoped_session,
 )
-from app.models import TenantMembership, MembershipStatus, UserRole
+from app.models import UserTenantMembership, MembershipStatus, UserRole
 from app.supabase_admin import get_supabase_admin, SupabaseAdminError
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -23,9 +23,9 @@ async def require_tenant_admin(
     session: AsyncSession = Depends(get_tenant_scoped_session),
 ) -> CurrentUser:
     membership = await session.scalar(
-        select(TenantMembership).where(
-            TenantMembership.user_id == current_user.id,
-            TenantMembership.tenant_id == ctx.tenant_id,
+        select(UserTenantMembership).where(
+            UserTenantMembership.user_id == current_user.id,
+            UserTenantMembership.tenant_id == ctx.tenant_id,
         )
     )
     if not membership or membership.role != UserRole.tenant_admin:
@@ -62,7 +62,7 @@ async def list_users(
     session: AsyncSession = Depends(get_tenant_scoped_session),
 ) -> list[UserRow]:
     rows = (await session.execute(
-        select(TenantMembership).order_by(TenantMembership.created_at.desc())
+        select(UserTenantMembership).order_by(UserTenantMembership.created_at.desc())
     )).scalars().all()
     return [
         UserRow(
@@ -87,7 +87,7 @@ async def invite_user(
 ) -> dict:
     # Reject duplicate invite within same tenant
     existing = await session.scalar(
-        select(TenantMembership).where(TenantMembership.email == body.email)
+        select(UserTenantMembership).where(UserTenantMembership.email == body.email)
     )
     if existing:
         raise HTTPException(
@@ -112,7 +112,7 @@ async def invite_user(
     if not supabase_user_id:
         raise HTTPException(status_code=502, detail="Supabase did not return a user id")
 
-    membership = TenantMembership(
+    membership = UserTenantMembership(
         tenant_id=ctx.tenant_id,
         user_id=uuid.UUID(supabase_user_id),
         email=body.email,
@@ -137,7 +137,7 @@ async def update_role(
     except ValueError:
         raise HTTPException(status_code=422, detail="membership_id must be a UUID")
 
-    membership = await session.get(TenantMembership, mid)
+    membership = await session.get(UserTenantMembership, mid)
     if not membership:
         raise HTTPException(status_code=404, detail="Membership not found")
     if membership.user_id == current_user.id:
@@ -159,7 +159,7 @@ async def remove_user(
     except ValueError:
         raise HTTPException(status_code=422, detail="membership_id must be a UUID")
 
-    membership = await session.get(TenantMembership, mid)
+    membership = await session.get(UserTenantMembership, mid)
     if not membership:
         raise HTTPException(status_code=404, detail="Membership not found")
     if membership.user_id == current_user.id:

@@ -499,6 +499,10 @@ async def _bump_campaign_stats(
 # ---------------------------------------------------------------------------
 
 
+def _norm_phone(s: str) -> str:
+    return "".join(c for c in (s or "") if c.isdigit())
+
+
 def _resolve_variable(spec: Any, contact: Any, tenant: Tenant) -> str:
     """Resolve one variable_mapping value → concrete string.
 
@@ -699,6 +703,43 @@ async def materialize_campaign_task(
                 {"cid": str(campaign_uuid)},
             )
             logger.info("materialize: no recipients for campaign %s", campaign_uuid)
+            return {"success": True, "recipient_count": 0}
+
+        # Resolve the sender's own phone to skip self-sends
+        sender_phone = await session.scalar(
+            select(PhoneNumber.display_phone_number).where(
+                PhoneNumber.id == campaign.phone_number_id
+            )
+        )
+        normalized_sender = _norm_phone(sender_phone or "")
+
+        filtered_contacts: list[Any] = []
+        for contact in contacts:
+            phone = getattr(contact, "phone_e164", "")
+            if _norm_phone(phone) == normalized_sender:
+                logger.warning(
+                    "Skipping self-send for campaign=%s recipient_phone=%s sender_phone=%s",
+                    campaign_uuid,
+                    phone,
+                    sender_phone,
+                )
+                continue
+            filtered_contacts.append(contact)
+        contacts = filtered_contacts
+
+        if not contacts:
+            campaign.status = CampaignStatus.completed
+            await session.execute(
+                text(
+                    "UPDATE campaign_stats SET total_recipients = 0, last_updated = now() "
+                    "WHERE campaign_id = :cid"
+                ),
+                {"cid": str(campaign_uuid)},
+            )
+            logger.info(
+                "materialize: campaign %s had all recipients filtered as self-sends",
+                campaign_uuid,
+            )
             return {"success": True, "recipient_count": 0}
 
         # ---- Build recipient rows with resolved template variables ----

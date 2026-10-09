@@ -114,7 +114,7 @@ class MetaCloudAPIClient:
                             "to": to_phone_e164,
                             "template": template_name,
                             "language": language_code,
-                            "variables": body_variables,
+                            "parameters": body_parameters,
                         },
                     )
                 return self._parse_response(response)

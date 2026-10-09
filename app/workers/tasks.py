@@ -601,28 +601,33 @@ async def materialize_campaign_task(
             Contact.opt_in_status == ContactOptInStatus.opted_in,
             Contact.is_archived == False,
         )
+        
+        contacts: list[Any] = []
+
         if audience_type == AudienceType.all_contacts:
             stmt = stmt.where(Contact.branch_id == branch_id)
+            contacts = list((await session.execute(stmt)).scalars().all())
+
         elif audience_type == AudienceType.branch_group:
-            # Phase 1: branch_group behaves like all_contacts for this branch.
-            # Extend later to multi-branch groups.
             stmt = stmt.where(Contact.branch_id == branch_id)
+            contacts = list((await session.execute(stmt)).scalars().all())
+
         elif audience_type == AudienceType.csv_upload:
             upload_id_raw = audience_config.get("upload_id")
             if not upload_id_raw:
-                logger.error(
-                    "materialize: csv_upload audience missing audience_config.upload_id"
-                )
+                logger.error("materialize: csv_upload missing upload_id")
                 return {"success": False, "reason": "missing_upload_id"}
             try:
                 upload_uuid = uuid.UUID(upload_id_raw)
             except (ValueError, TypeError):
                 return {"success": False, "reason": "invalid_upload_id"}
             stmt = stmt.where(Contact.csv_import_id == upload_uuid)
+            contacts = list((await session.execute(stmt)).scalars().all())
+
         elif audience_type == AudienceType.group:
             group_id_raw = audience_config.get("group_id")
             if not group_id_raw:
-                logger.error("materialize: group audience missing audience_config.group_id")
+                logger.error("materialize: group missing group_id")
                 return {"success": False, "reason": "missing_group_id"}
             try:
                 group_uuid = uuid.UUID(group_id_raw)
@@ -630,20 +635,19 @@ async def materialize_campaign_task(
                 return {"success": False, "reason": "invalid_group_id"}
             stmt = stmt.join(
                 ContactGroupMember, ContactGroupMember.contact_id == Contact.id
-            ).where(ContactGroupMember.group_id == group_uuid)   
+            ).where(ContactGroupMember.group_id == group_uuid)
+            contacts = list((await session.execute(stmt)).scalars().all())
 
         elif audience_type == AudienceType.combined:
             from types import SimpleNamespace
             from sqlalchemy import or_
-            from app.models import CampaignInlineContact, ContactGroup
+            from app.models import CampaignInlineContact
             
             branch_ids_raw = audience_config.get("branch_ids") or []
             group_ids_raw = audience_config.get("group_ids") or []
-
             branch_ids = [uuid.UUID(b) for b in branch_ids_raw]
             group_ids = [uuid.UUID(g) for g in group_ids_raw]
 
-            # Union of registered contacts across selected branches + groups
             conds = []
             if branch_ids:
                 conds.append(Contact.branch_id.in_(branch_ids))
@@ -653,38 +657,37 @@ async def materialize_campaign_task(
                 )
                 conds.append(Contact.id.in_(sub))
 
+            seen_phones = set()
+            
+            # 1. Fetch registered contacts
             if conds:
-                stmt = contact_base.where(or_(*conds))
-                for c in (await session.execute(stmt)).scalars().all():
-                    if c.phone_e164 in seen_phones:
-                        continue
-                    seen_phones.add(c.phone_e164)
-                    resolved_units.append((c, c.phone_e164, c.id))
+                combined_stmt = stmt.where(or_(*conds))
+                for c in (await session.execute(combined_stmt)).scalars().all():
+                    if c.phone_e164 not in seen_phones:
+                        seen_phones.add(c.phone_e164)
+                        contacts.append(c)
 
-            # Inline paste recipients — dedupe against registered by phone
+            # 2. Fetch inline/pasted contacts
             inline_stmt = select(CampaignInlineContact).where(
                 CampaignInlineContact.campaign_id == campaign_uuid
             )
             for inline in (await session.execute(inline_stmt)).scalars().all():
-                if inline.phone_e164 in seen_phones:
-                    # Same phone already in registered union — registered wins
-                    continue
-                seen_phones.add(inline.phone_e164)
-                fake_contact = SimpleNamespace(
-                    phone_e164=inline.phone_e164,
-                    full_name=inline.full_name or "",
-                    custom_fields={},
-                    branch_id=None,
-                    external_id=None,
-                    email=None,
-                )
-                resolved_units.append((fake_contact, inline.phone_e164, None))
-                     
+                if inline.phone_e164 not in seen_phones:
+                    seen_phones.add(inline.phone_e164)
+                    # Fake contact mimics standard structure so the resolver below succeeds
+                    fake_contact = SimpleNamespace(
+                        id=None, 
+                        phone_e164=inline.phone_e164,
+                        full_name=inline.full_name or "",
+                        custom_fields={},
+                        branch_id=None,
+                        external_id=None,
+                        email=None,
+                    )
+                    contacts.append(fake_contact)
+
         else:
             return {"success": False, "reason": "unknown_audience_type"}
-
-        contacts_result = await session.execute(stmt)
-        contacts = list(contacts_result.scalars().all())
 
         if not contacts:
             campaign.status = CampaignStatus.completed
@@ -703,7 +706,6 @@ async def materialize_campaign_task(
             resolved: dict[str, str] = {}
             for var_def in template_variables:
                 idx = str(var_def.get("name") or var_def.get("index") or "")
-
                 if not idx:
                     continue
                 path = variable_mappings.get(idx, "")

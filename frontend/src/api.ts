@@ -305,6 +305,40 @@ export interface CombinedAudienceConfig {
   inline_contacts?: InlineContact[];
 }
 
+export type VarMode = 'static' | 'contact' | 'tenant';
+
+export interface VarRow {
+  mode: VarMode;
+  value: string;
+  fallback: string;
+}
+
+export const CONTACT_FIELDS = [
+  { key: 'full_name', label: 'Name' },
+  { key: 'phone_e164', label: 'Phone' },
+  { key: 'external_id', label: 'External ID' },
+  { key: 'email', label: 'Email' },
+];
+
+export const TENANT_FIELDS = [
+  { key: 'name', label: 'Tenant name' },
+];
+
+export function varRowToMapping(row: VarRow): string | object {
+  if (row.mode === 'static') return `$literal:${row.value}`;
+  if (row.mode === 'contact') {
+    return { source: `contact.${row.value || 'full_name'}`, fallback: row.fallback || 'Receiver' };
+  }
+  if (row.mode === 'tenant') {
+    return { source: `tenant.${row.value || 'name'}`, fallback: row.fallback || '' };
+  }
+  return `$literal:`;
+}
+
+export function emptyVarRow(): VarRow {
+  return { mode: 'static', value: '', fallback: '' };
+}
+
 export interface BroadcastListRow {
   id: string;
   name: string;
@@ -359,16 +393,12 @@ export interface BroadcastDetail {
 }
 
 export function parsePastedContacts(text: string): InlineContact[] {
-  const lines = text
-    .split(/[\r\n]+/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-
+  const lines = text.split(/[\r\n]+/).map((l) => l.trim()).filter(Boolean);
   const out: InlineContact[] = [];
   const seen = new Set<string>();
 
   for (const line of lines) {
-    const parts = line.split(/[ ,\t;|]/).map((p) => p.trim()).filter(Boolean);
+    const parts = line.split(/[,\t;|]/).map((p) => p.trim()).filter(Boolean);
     let phone = "";
     let name: string | null = null;
 
@@ -385,7 +415,8 @@ export function parsePastedContacts(text: string): InlineContact[] {
       }
     }
 
-    if (!phone || seen.has(phone)) continue;
+    if (!phone || countDigits(phone) < 7) continue;
+    if (seen.has(phone)) continue;
     seen.add(phone);
     out.push({ phone_e164: phone, full_name: name });
   }
@@ -394,9 +425,11 @@ export function parsePastedContacts(text: string): InlineContact[] {
 }
 
 function normalizePhone(s: string): string {
-  const digits = s.replace(/\D/g, "");
+  const trimmed = s.trim();
+  const hasPlus = trimmed.startsWith("+");
+  const digits = trimmed.replace(/\D/g, "");
   if (!digits) return "";
-  if (s.trim().startsWith("+")) return "+" + digits;
+  if (hasPlus) return "+" + digits;
   if (digits.startsWith("0")) return "+92" + digits.slice(1);
   if (digits.startsWith("92")) return "+" + digits;
   return "+" + digits;

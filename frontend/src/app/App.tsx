@@ -40,8 +40,16 @@ import type {
   InlineContact,
   LatestBroadcast,
   UploadResponse,
+  VarMode,
+  VarRow,
 } from "../api";
-import { parsePastedContacts } from "../api";
+import {
+  CONTACT_FIELDS,
+  TENANT_FIELDS,
+  emptyVarRow,
+  parsePastedContacts,
+  varRowToMapping,
+} from "../api";
 function BroadcastCreateForm({ onDone, onCancel }: { onDone: () => void; onCancel: () => void }) {
   const toast = useToast();
   const [name, setName] = useState("");
@@ -59,7 +67,7 @@ function BroadcastCreateForm({ onDone, onCancel }: { onDone: () => void; onCance
   const [pastedContacts, setPastedContacts] = useState<InlineContact[]>([]);
   const [showPreview, setShowPreview] = useState(false);
 
-  const [variableMappings, setVariableMappings] = useState<Record<string, string>>({});
+  const [variableRows, setVariableRows] = useState<Record<string, VarRow>>({});
 
   const { templates, loading: tplLoading } = useTemplates();
   const { phoneNumbers, loading: phLoading } = usePhoneNumbers();
@@ -69,14 +77,15 @@ function BroadcastCreateForm({ onDone, onCancel }: { onDone: () => void; onCance
   const selectedTemplate = templates.find((t) => t.id === templateId);
 
   useEffect(() => {
-    if (!selectedTemplate) { setVariableMappings({}); return; }
-    const initial: Record<string, string> = {};
-    for (const v of selectedTemplate.variable_definitions ?? []) {
-      const key = (v as any).name ?? String((v as any).index);
-      initial[key] = "";
+    const vars = selectedTemplate?.variable_definitions ?? [];
+    const next: Record<string, VarRow> = {};
+    for (let i = 0; i < vars.length; i++) {
+      const key = String((vars[i] as any).name ?? (vars[i] as any).index ?? i + 1);
+      next[key] = variableRows[key] ?? emptyVarRow();
     }
-    setVariableMappings(initial);
-  }, [selectedTemplate?.id]);
+    setVariableRows(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [templateId, templates]);
 
   const canSubmit =
     name.trim() &&
@@ -88,7 +97,7 @@ function BroadcastCreateForm({ onDone, onCancel }: { onDone: () => void; onCance
         ? !!branchId && (audienceType !== "group" || selectedGroupId)
         : branchIds.length > 0 || groupIds.length > 0 || pastedContacts.length > 0)
     ) &&
-    Object.values(variableMappings).every((v) => v.trim().length > 0);
+    Object.values(variableRows).every((row) => row.mode === "static" ? row.value.trim().length > 0 : row.value.trim().length > 0);
 
   const handleSubmit = async () => {
     if (!canSubmit) return;
@@ -107,9 +116,9 @@ function BroadcastCreateForm({ onDone, onCancel }: { onDone: () => void; onCance
     }
 
     try {
-      const literalMappings: Record<string, string> = {};
-      for (const [k, v] of Object.entries(variableMappings)) {
-        literalMappings[k] = `$literal:${v}`;
+      const variable_mappings: Record<string, any> = {};
+      for (const [key, row] of Object.entries(variableRows)) {
+        variable_mappings[key] = varRowToMapping(row);
       }
 
       const payload = audienceMode === "single"
@@ -118,7 +127,7 @@ function BroadcastCreateForm({ onDone, onCancel }: { onDone: () => void; onCance
             branch_id: branchId,
             phone_number_id: phoneNumberId,
             template_id: templateId,
-            variable_mappings: literalMappings,
+            variable_mappings,
             audience_type: audienceType,
             audience_config: audienceType === "group" ? { group_id: selectedGroupId } : {},
             lane: "bulk" as const,
@@ -129,7 +138,7 @@ function BroadcastCreateForm({ onDone, onCancel }: { onDone: () => void; onCance
             branch_id: null,
             phone_number_id: phoneNumberId,
             template_id: templateId,
-            variable_mappings: literalMappings,
+            variable_mappings,
             audience_type: "combined" as const,
             audience_config: {
               ...(branchIds.length ? { branch_ids: branchIds } : {}),
@@ -378,31 +387,101 @@ function BroadcastCreateForm({ onDone, onCancel }: { onDone: () => void; onCance
           )}
         </div>
 
-        {selectedTemplate && (selectedTemplate.variable_definitions?.length ?? 0) > 0 && (
-          <div>
-            <label className="text-sm font-medium block mb-2" style={{ color: "#334155" }}>Template variables</label>
-            <div className="space-y-2">
-              {selectedTemplate.variable_definitions.map((v: any) => {
-                const key = v.name ?? String(v.index);
-                return (
-                  <div key={key} className="flex items-center gap-2">
-                    <span className="text-xs font-mono px-2 py-1 rounded" style={{ background: "#F1F5F9", color: "#475569" }}>
-                      {"{{"}{key}{"}}"}
-                    </span>
+        {selectedTemplate && (
+          <div className="space-y-2">
+            <div className="font-medium">Template variables</div>
+            {Object.keys(variableRows).length === 0 && (
+              <div className="text-sm text-gray-500">
+                This template has no variables.
+              </div>
+            )}
+            {Object.entries(variableRows).map(([key, row]) => (
+              <div key={key} className="flex items-start gap-2 flex-wrap">
+                <span className="inline-block min-w-[70px] text-xs font-mono bg-gray-100 rounded px-2 py-1 mt-1">
+                  {`{{${key}}}`}
+                </span>
+
+                <select
+                  className="border rounded p-1 text-sm"
+                  value={row.mode}
+                  onChange={e => setVariableRows({
+                    ...variableRows,
+                    [key]: { ...row, mode: e.target.value as VarMode, value: '', fallback: '' },
+                  })}
+                >
+                  <option value="static">Enter text</option>
+                  <option value="contact">Contact field</option>
+                  <option value="tenant">Tenant field</option>
+                </select>
+
+                {row.mode === 'static' && (
+                  <input
+                    className="flex-1 border rounded p-1 text-sm min-w-[180px]"
+                    placeholder="Same text for every recipient"
+                    value={row.value}
+                    onChange={e => setVariableRows({
+                      ...variableRows,
+                      [key]: { ...row, value: e.target.value },
+                    })}
+                  />
+                )}
+
+                {row.mode === 'contact' && (
+                  <>
+                    <select
+                      className="border rounded p-1 text-sm"
+                      value={row.value || 'full_name'}
+                      onChange={e => setVariableRows({
+                        ...variableRows,
+                        [key]: { ...row, value: e.target.value },
+                      })}
+                    >
+                      {CONTACT_FIELDS.map(f => (
+                        <option key={f.key} value={f.key}>{f.label}</option>
+                      ))}
+                    </select>
                     <input
-                      value={variableMappings[key] ?? ""}
-                      onChange={(e) => setVariableMappings((prev) => ({ ...prev, [key]: e.target.value }))}
-                      placeholder={v.description || v.example || `Value for {{${key}}}`}
-                      className="flex-1 px-3 py-2 text-sm rounded-md outline-none"
-                      style={{ border: "1px solid #E2E8F0", background: "#fff" }}
+                      className="flex-1 border rounded p-1 text-sm min-w-[140px]"
+                      placeholder="Fallback if empty (default: Receiver)"
+                      value={row.fallback}
+                      onChange={e => setVariableRows({
+                        ...variableRows,
+                        [key]: { ...row, fallback: e.target.value },
+                      })}
                     />
-                  </div>
-                );
-              })}
+                  </>
+                )}
+
+                {row.mode === 'tenant' && (
+                  <>
+                    <select
+                      className="border rounded p-1 text-sm"
+                      value={row.value || 'name'}
+                      onChange={e => setVariableRows({
+                        ...variableRows,
+                        [key]: { ...row, value: e.target.value },
+                      })}
+                    >
+                      {TENANT_FIELDS.map(f => (
+                        <option key={f.key} value={f.key}>{f.label}</option>
+                      ))}
+                    </select>
+                    <input
+                      className="flex-1 border rounded p-1 text-sm min-w-[140px]"
+                      placeholder="Fallback if empty"
+                      value={row.fallback}
+                      onChange={e => setVariableRows({
+                        ...variableRows,
+                        [key]: { ...row, fallback: e.target.value },
+                      })}
+                    />
+                  </>
+                )}
+              </div>
+            ))}
+            <div className="text-xs text-gray-500 pt-1">
+              Contact fields personalize per recipient. Fallback shows if that recipient's field is empty.
             </div>
-            <p className="text-xs mt-2" style={{ color: "#64748B" }}>
-              Phase 1: each variable gets the same literal value for every recipient.
-            </p>
           </div>
         )}
         <div className="flex justify-end gap-2 pt-4" style={{ borderTop: "1px solid #E2E8F0" }}>

@@ -630,7 +630,56 @@ async def materialize_campaign_task(
                 return {"success": False, "reason": "invalid_group_id"}
             stmt = stmt.join(
                 ContactGroupMember, ContactGroupMember.contact_id == Contact.id
-            ).where(ContactGroupMember.group_id == group_uuid)    
+            ).where(ContactGroupMember.group_id == group_uuid)   
+
+        elif audience_type == AudienceType.combined:
+            from types import SimpleNamespace
+            from sqlalchemy import or_
+            from app.models import CampaignInlineContact, ContactGroup
+            
+            branch_ids_raw = audience_config.get("branch_ids") or []
+            group_ids_raw = audience_config.get("group_ids") or []
+
+            branch_ids = [uuid.UUID(b) for b in branch_ids_raw]
+            group_ids = [uuid.UUID(g) for g in group_ids_raw]
+
+            # Union of registered contacts across selected branches + groups
+            conds = []
+            if branch_ids:
+                conds.append(Contact.branch_id.in_(branch_ids))
+            if group_ids:
+                sub = select(ContactGroupMember.contact_id).where(
+                    ContactGroupMember.group_id.in_(group_ids)
+                )
+                conds.append(Contact.id.in_(sub))
+
+            if conds:
+                stmt = contact_base.where(or_(*conds))
+                for c in (await session.execute(stmt)).scalars().all():
+                    if c.phone_e164 in seen_phones:
+                        continue
+                    seen_phones.add(c.phone_e164)
+                    resolved_units.append((c, c.phone_e164, c.id))
+
+            # Inline paste recipients — dedupe against registered by phone
+            inline_stmt = select(CampaignInlineContact).where(
+                CampaignInlineContact.campaign_id == campaign_uuid
+            )
+            for inline in (await session.execute(inline_stmt)).scalars().all():
+                if inline.phone_e164 in seen_phones:
+                    # Same phone already in registered union — registered wins
+                    continue
+                seen_phones.add(inline.phone_e164)
+                fake_contact = SimpleNamespace(
+                    phone_e164=inline.phone_e164,
+                    full_name=inline.full_name or "",
+                    custom_fields={},
+                    branch_id=None,
+                    external_id=None,
+                    email=None,
+                )
+                resolved_units.append((fake_contact, inline.phone_e164, None))
+                     
         else:
             return {"success": False, "reason": "unknown_audience_type"}
 

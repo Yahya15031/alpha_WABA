@@ -87,17 +87,14 @@ function BroadcastCreateForm({ onDone, onCancel }: { onDone: () => void; onCance
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [templateId, templates]);
 
-  const canSubmit =
+  const canSubmit = Boolean(
     name.trim() &&
-    templateId &&
     phoneNumberId &&
-    (!creating) &&
-    (
-      (audienceMode === "single"
-        ? !!branchId && (audienceType !== "group" || selectedGroupId)
-        : branchIds.length > 0 || groupIds.length > 0 || pastedContacts.length > 0)
-    ) &&
-    Object.values(variableRows).every((row) => row.mode === "static" ? row.value.trim().length > 0 : row.value.trim().length > 0);
+    templateId &&
+    (audienceMode === 'single'
+      ? branchId
+      : (branchIds.length > 0 || groupIds.length > 0 || pastedContacts.length > 0))
+  );
 
   const handleSubmit = async () => {
     if (!canSubmit) return;
@@ -183,20 +180,22 @@ function BroadcastCreateForm({ onDone, onCancel }: { onDone: () => void; onCance
             className="w-full px-3 py-2 text-sm rounded-md outline-none"
             style={{ border: "1px solid #E2E8F0", background: "#fff" }}
           />
-          <div>
-          <label className="text-sm font-medium block mb-1" style={{ color: "#334155" }}>Branch</label>
-          <select
-            value={branchId}
-            onChange={(e) => setBranchId(e.target.value)}
-            className="w-full px-3 py-2 text-sm rounded-md outline-none"
-            style={{ border: "1px solid #E2E8F0", background: "#fff" }}
-          >
-            <option value="">Select a branch</option>
-            {branches.map((b) => (
-              <option key={b.id} value={b.id}>{b.name}</option>
-            ))}
-          </select>
-        </div>
+          {audienceMode === 'single' && (
+            <div>
+              <label className="text-sm font-medium block mb-1" style={{ color: "#334155" }}>Branch</label>
+              <select
+                value={branchId}
+                onChange={(e) => setBranchId(e.target.value)}
+                className="w-full px-3 py-2 text-sm rounded-md outline-none"
+                style={{ border: "1px solid #E2E8F0", background: "#fff" }}
+              >
+                <option value="">Select a branch</option>
+                {branches.map((b) => (
+                  <option key={b.id} value={b.id}>{b.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
         </div>
 
         <div className="space-y-4">

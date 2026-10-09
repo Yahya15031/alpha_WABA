@@ -60,7 +60,7 @@ class MetaCloudAPIClient:
         self._base_url = f"{graph_api_base_url.rstrip('/')}/{api_version}"
         self._timeout = timeout_seconds
 
-async def list_templates(self, waba_id: str) -> list[dict[str, Any]]:
+    async def list_templates(self, waba_id: str) -> list[dict[str, Any]]:
         """Fetch all message templates for a WABA from Meta, paginated."""
         results: list[dict[str, Any]] = []
         url = f"{self._base_url}/{waba_id}/message_templates"
@@ -88,13 +88,13 @@ async def list_templates(self, waba_id: str) -> list[dict[str, Any]]:
 
     async def send_template_message(
         self,
-    *,
-    phone_number_id: str,
-    to_phone_e164: str,
-    template_name: str,
-    language_code: str,
-    body_parameters: list[dict[str, Any]],   # changed from body_variables
-) -> MetaSendResult:
+        *,
+        phone_number_id: str,
+        to_phone_e164: str,
+        template_name: str,
+        language_code: str,
+        body_parameters: list[dict[str, Any]],   # changed from body_variables
+    ) -> MetaSendResult:
         """POST /{phone_number_id}/messages with a template payload.
 
         Meta expects `to` without the leading `+`. We strip it here so the
@@ -103,14 +103,14 @@ async def list_templates(self, waba_id: str) -> list[dict[str, Any]]:
         url = f"{self._base_url}/{phone_number_id}/messages"
 
         payload: dict[str, Any] = {
-        "messaging_product": "whatsapp",
-        "to": to_phone_e164.lstrip("+"),
-        "type": "template",
-        "template": {
-            "name": template_name,
-            "language": {"code": language_code},
-        },
-    }
+            "messaging_product": "whatsapp",
+            "to": to_phone_e164.lstrip("+"),
+            "type": "template",
+            "template": {
+                "name": template_name,
+                "language": {"code": language_code},
+            },
+        }
         if body_parameters:
             payload["template"]["components"] = [
                 {
